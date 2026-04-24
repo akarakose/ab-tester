@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { deleteExperiment } from '@/lib/actions/experiments'
+import Spinner from '@/components/ui/Spinner'
 
 export default function DeleteButton({ id }: { id: string }) {
   const [confirming, setConfirming] = useState(false)
@@ -25,8 +26,9 @@ export default function DeleteButton({ id }: { id: string }) {
         <button
           onClick={handleDelete}
           disabled={pending}
-          className="text-sm text-red-500 hover:text-red-600 font-medium disabled:opacity-50 transition-colors"
+          className="text-sm text-red-500 hover:text-red-600 font-medium disabled:opacity-50 transition-colors flex items-center gap-1.5"
         >
+          {pending && <Spinner />}
           {pending ? 'Deleting...' : 'Yes, delete'}
         </button>
         <button
