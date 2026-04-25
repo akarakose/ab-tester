@@ -1,14 +1,45 @@
 import type { Metadata } from 'next'
 import { getExperiments } from '@/lib/actions/experiments'
+import type { SortField, SortOrder, ExperimentFilters } from '@/lib/actions/experiments'
 import Link from 'next/link'
+import { Suspense } from 'react'
 import ExperimentCard from '@/components/experiments/ExperimentCard'
+import SortControls from '@/components/experiments/SortControls'
+import FilterControls from '@/components/experiments/FilterControls'
 
 export const metadata: Metadata = {
   title: 'Experiments',
 }
 
-export default async function ExperimentsPage() {
-  const experiments = await getExperiments()
+const VALID_SORT_FIELDS: SortField[] = ['name', 'created_at', 'updated_at', 'status']
+const VALID_SORT_ORDERS: SortOrder[] = ['asc', 'desc']
+
+export default async function ExperimentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>
+}) {
+  const params = await searchParams
+
+  const sortBy: SortField = VALID_SORT_FIELDS.includes(params.sort as SortField)
+    ? (params.sort as SortField)
+    : 'created_at'
+  const sortOrder: SortOrder = VALID_SORT_ORDERS.includes(params.order as SortOrder)
+    ? (params.order as SortOrder)
+    : 'desc'
+
+  const filters: ExperimentFilters = {
+    name: params.q,
+    status: params.status,
+    createdFrom: params.created_from,
+    createdTo: params.created_to,
+    updatedFrom: params.updated_from,
+    updatedTo: params.updated_to,
+  }
+
+  const activeFilterCount = Object.values(filters).filter(Boolean).length
+
+  const experiments = await getExperiments(sortBy, sortOrder, filters)
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-8">
@@ -22,7 +53,7 @@ export default async function ExperimentsPage() {
         </Link>
       </div>
 
-      {experiments.length === 0 ? (
+      {experiments.length === 0 && activeFilterCount === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 border border-dashed border-foreground/20 rounded-xl text-center px-6">
           <svg
             className="w-10 h-10 text-foreground/20 mb-4"
@@ -46,11 +77,27 @@ export default async function ExperimentsPage() {
           </Link>
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          {experiments.map(exp => (
-            <ExperimentCard key={exp.id} experiment={exp} />
-          ))}
-        </div>
+        <>
+          <Suspense fallback={null}>
+            <FilterControls
+              activeCount={activeFilterCount}
+              rightSlot={<SortControls sortBy={sortBy} sortOrder={sortOrder} />}
+            />
+          </Suspense>
+
+          {experiments.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 border border-dashed border-foreground/20 rounded-xl text-center px-6">
+              <p className="font-semibold text-foreground">No results</p>
+              <p className="text-sm text-foreground/50 mt-1">No experiments match your current filters.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {experiments.map(exp => (
+                <ExperimentCard key={exp.id} experiment={exp} />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   )
