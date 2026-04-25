@@ -1,14 +1,19 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, Suspense } from 'react'
 import { login } from '@/lib/actions/auth'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 
-export default function LoginPage() {
-  const [state, formAction, pending] = useActionState(login, undefined)
+function UrlError() {
   const searchParams = useSearchParams()
   const urlError = searchParams.get('error')
+  if (!urlError) return null
+  return <p className="text-sm text-red-500">{urlError}</p>
+}
+
+export default function LoginPage() {
+  const [state, formAction, pending] = useActionState(login, undefined)
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
@@ -41,9 +46,12 @@ export default function LoginPage() {
             />
           </div>
 
-          {(state?.error || urlError) && (
-            <p className="text-sm text-red-500">{state?.error ?? urlError}</p>
+          {state?.error && (
+            <p className="text-sm text-red-500">{state.error}</p>
           )}
+          <Suspense fallback={null}>
+            <UrlError />
+          </Suspense>
 
           <button
             type="submit"
