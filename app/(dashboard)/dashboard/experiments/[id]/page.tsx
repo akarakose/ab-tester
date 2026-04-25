@@ -18,15 +18,6 @@ export async function generateMetadata({
   return { title: experiment?.name ?? 'Experiment' }
 }
 
-function StatRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between py-2 border-b border-foreground/5 last:border-0">
-      <span className="text-sm text-foreground/50">{label}</span>
-      <span className="text-sm font-medium">{value}</span>
-    </div>
-  )
-}
-
 export default async function ExperimentPage({
   params,
 }: {
@@ -36,17 +27,10 @@ export default async function ExperimentPage({
   const experiment = await getExperiment(id)
   if (!experiment) notFound()
 
-  const results = calculateResults(
-    experiment.control_visitors,
-    experiment.control_conversions,
-    experiment.variant_visitors,
-    experiment.variant_conversions,
-    experiment.confidence_level
-  )
-
-  const uplift = results.control_rate === 0
-    ? 0
-    : ((results.variant_rate - results.control_rate) / results.control_rate) * 100
+  const results = calculateResults(experiment.variants, experiment.confidence_level)
+  const winners = results.challengers.filter(c => c.is_significant)
+  const hasWinner = winners.length > 0
+  const confidencePct = (experiment.confidence_level * 100).toFixed(0)
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-8">
@@ -69,26 +53,62 @@ export default async function ExperimentPage({
       <div className="border border-foreground/10 rounded-xl p-5 mb-8">
         <h2 className="font-semibold mb-4">Results</h2>
 
-        <div className={`rounded-lg p-4 mb-5 ${results.is_significant ? 'bg-green-50 dark:bg-green-900/20' : 'bg-foreground/5'}`}>
-          <p className={`font-semibold ${results.is_significant ? 'text-green-700 dark:text-green-400' : 'text-foreground/60'}`}>
-            {results.is_significant ? 'Statistically significant' : 'Not significant yet'}
+        <div className={`rounded-lg p-4 mb-5 ${hasWinner ? 'bg-green-50 dark:bg-green-900/20' : 'bg-foreground/5'}`}>
+          <p className={`font-semibold ${hasWinner ? 'text-green-700 dark:text-green-400' : 'text-foreground/60'}`}>
+            {hasWinner
+              ? `${winners.length === 1 ? 'Winner found' : `${winners.length} winners found`}`
+              : 'Not significant yet'}
           </p>
           <p className="text-sm text-foreground/50 mt-0.5">
-            {results.is_significant
-              ? `The variant is the winner at ${(experiment.confidence_level * 100).toFixed(0)}% confidence.`
-              : `More data needed to reach ${(experiment.confidence_level * 100).toFixed(0)}% confidence.`}
+            {hasWinner
+              ? `${winners.map(w => w.name).join(', ')} ${winners.length === 1 ? 'is' : 'are'} statistically significant at ${confidencePct}% confidence.`
+              : `More data needed to reach ${confidencePct}% confidence.`}
           </p>
         </div>
 
-        <StatRow label="Control conversion rate" value={fmtPct(results.control_rate)} />
-        <StatRow label="Variant conversion rate" value={fmtPct(results.variant_rate)} />
-        <StatRow
-          label="Uplift"
-          value={Number.isFinite(uplift) ? `${uplift >= 0 ? '+' : ''}${uplift.toFixed(2)}%` : '—'}
-        />
-        <StatRow label="Z-score" value={fmtNum(results.z_score)} />
-        <StatRow label="P-value" value={fmtNum(results.p_value, 4)} />
-        <StatRow label="Confidence level" value={`${(experiment.confidence_level * 100).toFixed(0)}%`} />
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-foreground/10">
+                <th className="text-left py-2 pr-4 text-foreground/50 font-medium text-xs">Variant</th>
+                <th className="text-right py-2 px-4 text-foreground/50 font-medium text-xs">Visitors</th>
+                <th className="text-right py-2 px-4 text-foreground/50 font-medium text-xs">Conversions</th>
+                <th className="text-right py-2 px-4 text-foreground/50 font-medium text-xs">Rate</th>
+                <th className="text-right py-2 px-4 text-foreground/50 font-medium text-xs">Uplift</th>
+                <th className="text-right py-2 pl-4 text-foreground/50 font-medium text-xs">P-value</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-foreground/5 bg-foreground/[0.02]">
+                <td className="py-2.5 pr-4 font-medium">{results.control.name}</td>
+                <td className="py-2.5 px-4 text-right">{experiment.variants[0].visitors.toLocaleString()}</td>
+                <td className="py-2.5 px-4 text-right">{experiment.variants[0].conversions.toLocaleString()}</td>
+                <td className="py-2.5 px-4 text-right font-medium">{fmtPct(results.control.conversion_rate)}</td>
+                <td className="py-2.5 px-4 text-right text-foreground/40">—</td>
+                <td className="py-2.5 pl-4 text-right text-foreground/40">—</td>
+              </tr>
+              {results.challengers.map((c, i) => (
+                <tr key={c.name} className={`border-b border-foreground/5 last:border-0 ${c.is_significant ? 'bg-green-50/50 dark:bg-green-900/10' : ''}`}>
+                  <td className="py-2.5 pr-4 font-medium flex items-center gap-2">
+                    {c.name}
+                    {c.is_significant && <span className="text-xs text-green-600 dark:text-green-400 font-normal">winner</span>}
+                  </td>
+                  <td className="py-2.5 px-4 text-right">{experiment.variants[i + 1].visitors.toLocaleString()}</td>
+                  <td className="py-2.5 px-4 text-right">{experiment.variants[i + 1].conversions.toLocaleString()}</td>
+                  <td className="py-2.5 px-4 text-right font-medium">{fmtPct(c.conversion_rate)}</td>
+                  <td className={`py-2.5 px-4 text-right font-medium ${c.uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                    {Number.isFinite(c.uplift) ? `${c.uplift >= 0 ? '+' : ''}${c.uplift.toFixed(2)}%` : '—'}
+                  </td>
+                  <td className="py-2.5 pl-4 text-right">{fmtNum(c.p_value, 4)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="text-xs text-foreground/40 mt-4">
+          Confidence level: {confidencePct}% · Z-scores available per variant in edit view
+        </p>
       </div>
 
       <div className="border border-foreground/10 rounded-xl p-5">

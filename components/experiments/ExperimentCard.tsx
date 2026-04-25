@@ -5,17 +5,8 @@ import type { Experiment } from '@/types/experiment'
 import StatusBadge from '@/components/ui/StatusBadge'
 
 export default function ExperimentCard({ experiment }: { experiment: Experiment }) {
-  const results = calculateResults(
-    experiment.control_visitors,
-    experiment.control_conversions,
-    experiment.variant_visitors,
-    experiment.variant_conversions,
-    experiment.confidence_level
-  )
-
-  const uplift = results.control_rate === 0
-    ? 0
-    : ((results.variant_rate - results.control_rate) / results.control_rate) * 100
+  const results = calculateResults(experiment.variants, experiment.confidence_level)
+  const hasWinner = results.challengers.some(c => c.is_significant)
 
   return (
     <Link
@@ -32,27 +23,41 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
         <StatusBadge status={experiment.status} />
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-        <div>
-          <p className="text-foreground/50 text-xs">Control</p>
-          <p className="font-medium">{fmtPct(results.control_rate)}</p>
+      <div className="mt-4 text-sm">
+        <div className="grid grid-cols-4 gap-2 text-xs text-foreground/50 mb-1.5 px-1">
+          <span>Variant</span>
+          <span className="text-right">Rate</span>
+          <span className="text-right">Uplift</span>
+          <span className="text-right">Sig.</span>
         </div>
-        <div>
-          <p className="text-foreground/50 text-xs">Variant</p>
-          <p className="font-medium">{fmtPct(results.variant_rate)}</p>
-        </div>
-        <div>
-          <p className="text-foreground/50 text-xs">Uplift</p>
-          <p className={`font-medium ${uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-            {Number.isFinite(uplift) ? `${uplift >= 0 ? '+' : ''}${uplift.toFixed(1)}%` : '—'}
-          </p>
+
+        <div className="flex flex-col gap-1">
+          <div className="grid grid-cols-4 gap-2 px-1 py-1 rounded-lg bg-foreground/5">
+            <span className="text-xs font-medium truncate">{results.control.name}</span>
+            <span className="text-xs text-right">{fmtPct(results.control.conversion_rate)}</span>
+            <span className="text-xs text-right text-foreground/40">—</span>
+            <span className="text-xs text-right text-foreground/40">—</span>
+          </div>
+
+          {results.challengers.map(c => (
+            <div key={c.name} className="grid grid-cols-4 gap-2 px-1 py-1 rounded-lg hover:bg-foreground/5">
+              <span className="text-xs font-medium truncate">{c.name}</span>
+              <span className="text-xs text-right">{fmtPct(c.conversion_rate)}</span>
+              <span className={`text-xs text-right font-medium ${c.uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {Number.isFinite(c.uplift) ? `${c.uplift >= 0 ? '+' : ''}${c.uplift.toFixed(1)}%` : '—'}
+              </span>
+              <span className="text-xs text-right">
+                {c.is_significant ? '✓' : '—'}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
       <div className="mt-3 flex items-center gap-1.5">
-        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${results.is_significant ? 'bg-green-500' : 'bg-foreground/20'}`} />
+        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasWinner ? 'bg-green-500' : 'bg-foreground/20'}`} />
         <p className="text-xs text-foreground/50">
-          {results.is_significant ? 'Statistically significant' : 'Not significant yet'}
+          {hasWinner ? 'Has a winner' : 'Not significant yet'}
           {' · '}{(experiment.confidence_level * 100).toFixed(0)}% confidence level
         </p>
       </div>

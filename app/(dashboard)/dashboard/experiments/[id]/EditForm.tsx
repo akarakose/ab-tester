@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
 import { updateExperiment } from '@/lib/actions/experiments'
 import type { Experiment } from '@/types/experiment'
 import SubmitButton from '@/components/ui/SubmitButton'
@@ -11,9 +11,27 @@ const labelClass = 'text-sm font-medium'
 export default function EditForm({ experiment }: { experiment: Experiment }) {
   const updateWithId = updateExperiment.bind(null, experiment.id)
   const [state, formAction, pending] = useActionState(updateWithId, undefined)
+  const [variantCount, setVariantCount] = useState(experiment.variants.length)
+
+  const addVariant = () => {
+    if (variantCount >= 6) return
+    setVariantCount(c => c + 1)
+  }
+
+  const removeVariant = () => {
+    if (variantCount <= 2) return
+    setVariantCount(c => c - 1)
+  }
+
+  const getDefaultName = (index: number) => {
+    if (index === 0) return 'Control'
+    return `Variant ${String.fromCharCode(64 + index)}`
+  }
 
   return (
     <form action={formAction} className="flex flex-col gap-5">
+      <input type="hidden" name="variant_count" value={variantCount} />
+
       <div className="flex flex-col gap-1">
         <label htmlFor="name" className={labelClass}>Experiment name</label>
         <input
@@ -40,65 +58,67 @@ export default function EditForm({ experiment }: { experiment: Experiment }) {
         </select>
       </div>
 
-      <div className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-4">
-        <p className="text-sm font-semibold">Control (original)</p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1">
-            <label htmlFor="control_visitors" className={labelClass}>Visitors</label>
-            <input
-              id="control_visitors"
-              name="control_visitors"
-              type="number"
-              min="1"
-              required
-              defaultValue={experiment.control_visitors}
-              className={inputClass}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="control_conversions" className={labelClass}>Conversions</label>
-            <input
-              id="control_conversions"
-              name="control_conversions"
-              type="number"
-              min="0"
-              required
-              defaultValue={experiment.control_conversions}
-              className={inputClass}
-            />
-          </div>
-        </div>
+      <div className="flex flex-col gap-3">
+        {Array.from({ length: variantCount }).map((_, i) => {
+          const saved = experiment.variants[i]
+          return (
+            <div key={i} className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <input
+                  name={`variant_name_${i}`}
+                  type="text"
+                  required
+                  defaultValue={saved?.name ?? getDefaultName(i)}
+                  className="text-sm font-semibold bg-transparent outline-none border-b border-transparent focus:border-foreground/20 transition-colors"
+                />
+                {i === variantCount - 1 && i >= 2 && (
+                  <button
+                    type="button"
+                    onClick={removeVariant}
+                    className="text-xs text-foreground/40 hover:text-red-500 transition-colors"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className={labelClass}>Visitors</label>
+                  <input
+                    name={`variant_visitors_${i}`}
+                    type="number"
+                    min="1"
+                    required
+                    defaultValue={saved?.visitors}
+                    className={inputClass}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className={labelClass}>Conversions</label>
+                  <input
+                    name={`variant_conversions_${i}`}
+                    type="number"
+                    min="0"
+                    required
+                    defaultValue={saved?.conversions}
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+            </div>
+          )
+        })}
       </div>
 
-      <div className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-4">
-        <p className="text-sm font-semibold">Variant (challenger)</p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1">
-            <label htmlFor="variant_visitors" className={labelClass}>Visitors</label>
-            <input
-              id="variant_visitors"
-              name="variant_visitors"
-              type="number"
-              min="1"
-              required
-              defaultValue={experiment.variant_visitors}
-              className={inputClass}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="variant_conversions" className={labelClass}>Conversions</label>
-            <input
-              id="variant_conversions"
-              name="variant_conversions"
-              type="number"
-              min="0"
-              required
-              defaultValue={experiment.variant_conversions}
-              className={inputClass}
-            />
-          </div>
-        </div>
-      </div>
+      {variantCount < 6 && (
+        <button
+          type="button"
+          onClick={addVariant}
+          className="text-sm text-brand hover:opacity-75 transition-opacity text-left"
+        >
+          + Add variant
+        </button>
+      )}
 
       <div className="flex flex-col gap-1">
         <label htmlFor="confidence_level" className={labelClass}>Confidence level (%)</label>

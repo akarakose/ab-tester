@@ -1,4 +1,4 @@
-import type { ExperimentResult } from '@/types/experiment'
+import type { Variant, VariantResult, ExperimentResult } from '@/types/experiment'
 
 // Abramowitz & Stegun approximation (max error: 1.5e-7)
 function erf(x: number): number {
@@ -18,25 +18,45 @@ function normalCDF(z: number): number {
   return 0.5 * (1 + erf(z / Math.sqrt(2)))
 }
 
-export function calculateResults(
-  controlVisitors: number,
-  controlConversions: number,
-  variantVisitors: number,
-  variantConversions: number,
-  confidenceLevel: number
-): ExperimentResult {
-  const controlRate = controlConversions / controlVisitors
-  const variantRate = variantConversions / variantVisitors
+function zTest(control: Variant, challenger: Variant, alpha: number): VariantResult {
+  const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
+  const challengerRate = challenger.visitors > 0 ? challenger.conversions / challenger.visitors : 0
 
-  const pPool = (controlConversions + variantConversions) / (controlVisitors + variantVisitors)
-  const se = Math.sqrt(pPool * (1 - pPool) * (1 / controlVisitors + 1 / variantVisitors))
+  const pPool = (control.conversions + challenger.conversions) / (control.visitors + challenger.visitors)
+  const se = Math.sqrt(pPool * (1 - pPool) * (1 / control.visitors + 1 / challenger.visitors))
 
-  const zScore = se === 0 ? 0 : (variantRate - controlRate) / se
+  const zScore = se === 0 ? 0 : (challengerRate - controlRate) / se
   const pValue = 2 * (1 - normalCDF(Math.abs(zScore)))
+  const uplift = controlRate === 0 ? 0 : ((challengerRate - controlRate) / controlRate) * 100
 
-  // confidenceLevel is stored as a decimal (e.g. 0.95), alpha is the threshold for rejection
-  const alpha = 1 - confidenceLevel
-  const isSignificant = pValue < alpha
+  return {
+    name: challenger.name,
+    conversion_rate: challengerRate,
+    z_score: zScore,
+    p_value: pValue,
+    is_significant: pValue < alpha,
+    uplift,
+  }
+}
 
-  return { control_rate: controlRate, variant_rate: variantRate, z_score: zScore, p_value: pValue, is_significant: isSignificant }
+export function calculateResults(variants: Variant[], confidenceLevel: number): ExperimentResult {
+  const control = variants[0]
+  const challengers = variants.slice(1)
+
+  // Bonferroni correction: divide alpha by number of comparisons to account for multiple testing
+  const alpha = (1 - confidenceLevel) / Math.max(challengers.length, 1)
+
+  const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
+
+  return {
+    control: {
+      name: control.name,
+      conversion_rate: controlRate,
+      z_score: 0,
+      p_value: 1,
+      is_significant: false,
+      uplift: 0,
+    },
+    challengers: challengers.map(c => zTest(control, c, alpha)),
+  }
 }
