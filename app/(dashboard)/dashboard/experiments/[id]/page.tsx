@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import { getExperiment } from '@/lib/actions/experiments'
 import { calculateResults } from '@/lib/stats'
 import { fmtPct, fmtNum } from '@/lib/format'
@@ -6,6 +7,16 @@ import Link from 'next/link'
 import EditForm from './EditForm'
 import DeleteButton from './DeleteButton'
 import StatusBadge from '@/components/ui/StatusBadge'
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}): Promise<Metadata> {
+  const { id } = await params
+  const experiment = await getExperiment(id)
+  return { title: experiment?.name ?? 'Experiment' }
+}
 
 function StatRow({ label, value }: { label: string; value: string }) {
   return (

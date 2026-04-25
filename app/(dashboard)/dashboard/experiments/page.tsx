@@ -1,6 +1,11 @@
+import type { Metadata } from 'next'
 import { getExperiments } from '@/lib/actions/experiments'
 import Link from 'next/link'
 import ExperimentCard from '@/components/experiments/ExperimentCard'
+
+export const metadata: Metadata = {
+  title: 'Experiments',
+}
 
 export default async function ExperimentsPage() {
   const experiments = await getExperiments()
