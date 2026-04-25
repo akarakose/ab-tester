@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
 import { createExperiment } from '@/lib/actions/experiments'
 import Link from 'next/link'
 import SubmitButton from '@/components/ui/SubmitButton'
@@ -8,8 +8,29 @@ import SubmitButton from '@/components/ui/SubmitButton'
 const inputClass = 'border border-foreground/20 rounded-lg px-3 py-2 bg-background text-foreground text-sm outline-none focus:ring-2 focus:ring-brand w-full'
 const labelClass = 'text-sm font-medium'
 
+const DEFAULT_VARIANTS = [
+  { name: 'Control' },
+  { name: 'Variant A' },
+]
+
 export default function NewExperimentPage() {
   const [state, formAction, pending] = useActionState(createExperiment, undefined)
+  const [variantCount, setVariantCount] = useState(DEFAULT_VARIANTS.length)
+
+  const addVariant = () => {
+    if (variantCount >= 6) return
+    setVariantCount(c => c + 1)
+  }
+
+  const removeVariant = () => {
+    if (variantCount <= 2) return
+    setVariantCount(c => c - 1)
+  }
+
+  const getDefaultName = (index: number) => {
+    if (index === 0) return 'Control'
+    return `Variant ${String.fromCharCode(64 + index)}`
+  }
 
   return (
     <div className="max-w-xl mx-auto px-6 py-8">
@@ -22,6 +43,8 @@ export default function NewExperimentPage() {
       </div>
 
       <form action={formAction} className="flex flex-col gap-5">
+        <input type="hidden" name="variant_count" value={variantCount} />
+
         <div className="flex flex-col gap-1">
           <label htmlFor="name" className={labelClass}>Experiment name</label>
           <input
@@ -34,65 +57,65 @@ export default function NewExperimentPage() {
           />
         </div>
 
-        <div className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-4">
-          <p className="text-sm font-semibold">Control (original)</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label htmlFor="control_visitors" className={labelClass}>Visitors</label>
-              <input
-                id="control_visitors"
-                name="control_visitors"
-                type="number"
-                min="1"
-                required
-                placeholder="1000"
-                className={inputClass}
-              />
+        <div className="flex flex-col gap-3">
+          {Array.from({ length: variantCount }).map((_, i) => (
+            <div key={i} className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <input
+                  name={`variant_name_${i}`}
+                  type="text"
+                  required
+                  defaultValue={getDefaultName(i)}
+                  placeholder={getDefaultName(i)}
+                  className="text-sm font-semibold bg-transparent outline-none border-b border-transparent focus:border-foreground/20 transition-colors"
+                />
+                {i === variantCount - 1 && i >= 2 && (
+                  <button
+                    type="button"
+                    onClick={removeVariant}
+                    className="text-xs text-foreground/40 hover:text-red-500 transition-colors"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className={labelClass}>Visitors</label>
+                  <input
+                    name={`variant_visitors_${i}`}
+                    type="number"
+                    min="1"
+                    required
+                    placeholder="1000"
+                    className={inputClass}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className={labelClass}>Conversions</label>
+                  <input
+                    name={`variant_conversions_${i}`}
+                    type="number"
+                    min="0"
+                    required
+                    placeholder={i === 0 ? '50' : '65'}
+                    className={inputClass}
+                  />
+                </div>
+              </div>
             </div>
-            <div className="flex flex-col gap-1">
-              <label htmlFor="control_conversions" className={labelClass}>Conversions</label>
-              <input
-                id="control_conversions"
-                name="control_conversions"
-                type="number"
-                min="0"
-                required
-                placeholder="50"
-                className={inputClass}
-              />
-            </div>
-          </div>
+          ))}
         </div>
 
-        <div className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-4">
-          <p className="text-sm font-semibold">Variant (challenger)</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label htmlFor="variant_visitors" className={labelClass}>Visitors</label>
-              <input
-                id="variant_visitors"
-                name="variant_visitors"
-                type="number"
-                min="1"
-                required
-                placeholder="1000"
-                className={inputClass}
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label htmlFor="variant_conversions" className={labelClass}>Conversions</label>
-              <input
-                id="variant_conversions"
-                name="variant_conversions"
-                type="number"
-                min="0"
-                required
-                placeholder="65"
-                className={inputClass}
-              />
-            </div>
-          </div>
-        </div>
+        {variantCount < 6 && (
+          <button
+            type="button"
+            onClick={addVariant}
+            className="text-sm text-brand hover:opacity-75 transition-opacity text-left"
+          >
+            + Add variant
+          </button>
+        )}
 
         <div className="flex flex-col gap-1">
           <label htmlFor="confidence_level" className={labelClass}>Confidence level (%)</label>
