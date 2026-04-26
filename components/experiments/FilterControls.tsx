@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useTransition } from 'react'
 import type { ReactNode } from 'react'
 
 const fieldClass = 'border border-foreground/15 rounded-lg px-2.5 py-1.5 bg-background text-sm outline-none focus:ring-2 focus:ring-brand w-full'
@@ -22,6 +22,7 @@ export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode })
   const [open, setOpen] = useState(advancedFilterCount > 0)
   const [nameInput, setNameInput] = useState(searchParams.get('q') ?? '')
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [isPending, startTransition] = useTransition()
 
   // Close on click outside
   useEffect(() => {
@@ -35,11 +36,15 @@ export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode })
   }, [])
 
   useEffect(() => {
+    // Skip when nameInput already matches URL — prevents feedback loop where any other
+    // URL change (status, sort, dates) would re-fire this effect and queue a redundant push.
+    if (nameInput === (searchParams.get('q') ?? '')) return
+
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       const params = new URLSearchParams(searchParams.toString())
       if (nameInput) { params.set('q', nameInput) } else { params.delete('q') }
-      router.push(`?${params.toString()}`)
+      startTransition(() => router.push(`?${params.toString()}`))
     }, 350)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [nameInput, router, searchParams])
@@ -47,7 +52,7 @@ export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode })
   const updateParam = (key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString())
     if (value) { params.set(key, value) } else { params.delete(key) }
-    router.push(`?${params.toString()}`)
+    startTransition(() => router.push(`?${params.toString()}`))
   }
 
   const clearAll = () => {
@@ -56,7 +61,7 @@ export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode })
     const params = new URLSearchParams(searchParams.toString())
     const filterKeys = ['q', 'status', 'created_from', 'created_to', 'updated_from', 'updated_to']
     filterKeys.forEach(k => params.delete(k))
-    router.push(`?${params.toString()}`)
+    startTransition(() => router.push(`?${params.toString()}`))
   }
 
   const hasAnyFilter = !!nameInput || advancedFilterCount > 0
@@ -67,9 +72,16 @@ export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode })
       <div ref={containerRef} className="relative flex-1">
         {/* Search bar */}
         <div className="flex items-center h-9 border border-foreground/15 rounded-lg bg-background focus-within:ring-2 focus-within:ring-brand transition-shadow overflow-hidden">
-          <svg className="ml-3 shrink-0 w-4 h-4 text-foreground/35 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-          </svg>
+          {isPending ? (
+            <svg className="ml-3 shrink-0 w-4 h-4 text-brand animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+          ) : (
+            <svg className="ml-3 shrink-0 w-4 h-4 text-foreground/35 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+          )}
 
           <input
             type="text"
