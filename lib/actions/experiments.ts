@@ -1,5 +1,6 @@
 'use server'
 
+import { cache } from 'react'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
@@ -7,12 +8,12 @@ import type { Experiment, Variant } from '@/types/experiment'
 
 export type ExperimentActionState = { error?: string } | undefined
 
-async function getAuthenticatedUser() {
+const getAuthenticatedUser = cache(async () => {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-  return { supabase, user }
-}
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) redirect('/login')
+  return { supabase, user: session.user }
+})
 
 function parseVariants(formData: FormData): { variants: Variant[] } | { error: string } {
   const countRaw = formData.get('variant_count')
