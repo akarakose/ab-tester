@@ -80,7 +80,6 @@ export default async function ExperimentsPage({
         <>
           <Suspense fallback={null}>
             <FilterControls
-              activeCount={activeFilterCount}
               rightSlot={<SortControls sortBy={sortBy} sortOrder={sortOrder} />}
             />
           </Suspense>
