@@ -1,6 +1,7 @@
 'use client'
 
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useTransition } from 'react'
 import type { SortField, SortOrder } from '@/lib/actions/experiments'
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
@@ -19,12 +20,13 @@ export default function SortControls({
 }) {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const [isPending, startTransition] = useTransition()
 
   const update = (field: SortField, order: SortOrder) => {
     const params = new URLSearchParams(searchParams.toString())
     params.set('sort', field)
     params.set('order', order)
-    router.push(`?${params.toString()}`)
+    startTransition(() => router.push(`?${params.toString()}`))
   }
 
   const toggleOrder = () => {
@@ -32,12 +34,13 @@ export default function SortControls({
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className={`flex items-center gap-2 transition-opacity ${isPending ? 'opacity-60' : ''}`}>
       <span className="text-sm text-foreground/50">Sort</span>
       <select
         value={sortBy}
         onChange={e => update(e.target.value as SortField, sortOrder)}
-        className="text-sm border border-foreground/15 rounded-lg px-2 py-1.5 bg-background outline-none focus:ring-2 focus:ring-brand cursor-pointer"
+        disabled={isPending}
+        className="text-sm border border-foreground/15 rounded-lg px-2 py-1.5 bg-background outline-none focus:ring-2 focus:ring-brand cursor-pointer disabled:cursor-wait"
       >
         {SORT_OPTIONS.map(opt => (
           <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -45,7 +48,8 @@ export default function SortControls({
       </select>
       <button
         onClick={toggleOrder}
-        className="text-sm border border-foreground/15 rounded-lg px-2 py-1.5 bg-background hover:bg-foreground/5 transition-colors min-w-[40px] text-center"
+        disabled={isPending}
+        className="text-sm border border-foreground/15 rounded-lg px-2 py-1.5 bg-background hover:bg-foreground/5 transition-colors min-w-[40px] text-center disabled:cursor-wait"
         title={sortOrder === 'asc' ? 'Ascending' : 'Descending'}
       >
         {sortOrder === 'asc' ? '↑' : '↓'}
