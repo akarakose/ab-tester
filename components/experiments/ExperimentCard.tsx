@@ -1,10 +1,85 @@
-import { calculateResults } from '@/lib/stats'
+import { Fragment } from 'react'
+import { calculateResults, calculateCsvMetricResults } from '@/lib/stats'
 import { fmtPct } from '@/lib/format'
 import Link from 'next/link'
 import type { Experiment } from '@/types/experiment'
 import StatusBadge from '@/components/ui/StatusBadge'
 
 export default function ExperimentCard({ experiment }: { experiment: Experiment }) {
+  const isCsv = experiment.metrics && experiment.metrics.length > 0
+
+  if (isCsv) {
+    const csvResults = calculateCsvMetricResults(experiment.variants, experiment.metrics!, experiment.confidence_level)
+    const significantCount = csvResults.filter(r => r.challengers.some(c => c.is_significant)).length
+    const displayedResults = csvResults.slice(0, 5)
+    const hiddenCount = csvResults.length - displayedResults.length
+
+    return (
+      <Link
+        href={`/dashboard/experiments/${experiment.id}`}
+        className="block border border-foreground/10 rounded-xl p-5 hover:border-brand/50 hover:shadow-sm transition-all"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <h2 className="font-semibold truncate">{experiment.name}</h2>
+            <p className="text-sm text-foreground/50 mt-0.5">
+              {new Date(experiment.created_at).toLocaleDateString()}
+            </p>
+          </div>
+          <StatusBadge status={experiment.status} />
+        </div>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-foreground/8">
+                <th className="text-left pb-1.5 text-foreground/50 font-medium pr-4">Metric</th>
+                <th className="text-right pb-1.5 text-foreground/50 font-medium px-2 whitespace-nowrap">
+                  {experiment.variants[0].name}
+                </th>
+                <th className="pb-1.5 w-3" />
+                {experiment.variants.slice(1).map(v => (
+                  <Fragment key={v.name}>
+                    <th className="text-right pb-1.5 text-foreground/50 font-medium px-2 whitespace-nowrap">{v.name}</th>
+                    <th className="pb-1.5 w-3" />
+                  </Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {displayedResults.map(r => (
+                <tr key={r.metricName} className="border-b border-foreground/5 last:border-0">
+                  <td className="py-1 pr-4 font-medium truncate max-w-[110px]">{r.metricName}</td>
+                  <td className="py-1 px-2 text-right text-foreground/60">{fmtPct(r.control.rate)}</td>
+                  <td className="py-1 px-1 text-foreground/20">—</td>
+                  {r.challengers.map(c => (
+                    <Fragment key={c.name}>
+                      <td className="py-1 px-2 text-right text-foreground/60">{fmtPct(c.conversion_rate)}</td>
+                      <td className={`py-1 px-1 ${c.is_significant ? (c.uplift >= 0 ? 'text-green-600' : 'text-red-500') : 'text-foreground/20'}`}>
+                        {c.is_significant ? '✓' : '—'}
+                      </td>
+                    </Fragment>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {hiddenCount > 0 && (
+            <p className="text-xs text-foreground/40 mt-2">+{hiddenCount} more metric{hiddenCount !== 1 ? 's' : ''}</p>
+          )}
+        </div>
+
+        <div className="mt-3 flex items-center gap-1.5">
+          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${significantCount > 0 ? 'bg-green-500' : 'bg-foreground/20'}`} />
+          <p className="text-xs text-foreground/50">
+            {significantCount > 0 ? `${significantCount} of ${csvResults.length} metrics significant` : 'No significant metrics yet'}
+            {' · '}{experiment.metrics!.length} metrics · {experiment.variants.length} variants
+          </p>
+        </div>
+      </Link>
+    )
+  }
+
   const results = calculateResults(experiment.variants, experiment.confidence_level)
   const hasWinner = results.challengers.some(c => c.is_significant)
 
@@ -46,7 +121,7 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
               <span className={`text-xs text-right font-medium ${c.uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
                 {Number.isFinite(c.uplift) ? `${c.uplift >= 0 ? '+' : ''}${c.uplift.toFixed(1)}%` : '—'}
               </span>
-              <span className="text-xs text-right">
+              <span className={`text-xs text-right ${c.is_significant ? (c.uplift >= 0 ? 'text-green-600' : 'text-red-500') : 'text-foreground/40'}`}>
                 {c.is_significant ? '✓' : '—'}
               </span>
             </div>

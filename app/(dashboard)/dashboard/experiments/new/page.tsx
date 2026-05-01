@@ -1,146 +1,52 @@
-'use client'
-
-import { useActionState, useState } from 'react'
-import { createExperiment } from '@/lib/actions/experiments'
 import Link from 'next/link'
-import SubmitButton from '@/components/ui/SubmitButton'
+import type { Metadata } from 'next'
 
-const inputClass = 'border border-foreground/20 rounded-lg px-3 py-2 bg-background text-foreground text-sm outline-none focus:ring-2 focus:ring-brand w-full'
-const labelClass = 'text-sm font-medium'
+export const metadata: Metadata = {
+  title: 'New Experiment',
+}
 
-const DEFAULT_VARIANTS = [
-  { name: 'Control' },
-  { name: 'Variant A' },
-]
-
-export default function NewExperimentPage() {
-  const [state, formAction, pending] = useActionState(createExperiment, undefined)
-  const [variantCount, setVariantCount] = useState(DEFAULT_VARIANTS.length)
-
-  const addVariant = () => {
-    if (variantCount >= 6) return
-    setVariantCount(c => c + 1)
-  }
-
-  const removeVariant = () => {
-    if (variantCount <= 2) return
-    setVariantCount(c => c - 1)
-  }
-
-  const getDefaultName = (index: number) => {
-    if (index === 0) return 'Control'
-    return `Variant ${String.fromCharCode(64 + index)}`
-  }
-
+export default function NewExperimentTypePage() {
   return (
     <div className="max-w-xl mx-auto px-6 py-8">
-      <div className="mb-6">
+      <div className="mb-8">
         <Link href="/dashboard/experiments" className="text-sm text-foreground/50 hover:text-foreground transition-colors">
           ← Back to experiments
         </Link>
         <h1 className="text-xl font-bold mt-3">New experiment</h1>
-        <p className="text-sm text-foreground/50 mt-1">Enter your A/B test data to calculate significance.</p>
+        <p className="text-sm text-foreground/50 mt-1">How would you like to enter your data?</p>
       </div>
 
-      <form action={formAction} className="flex flex-col gap-5">
-        <input type="hidden" name="variant_count" value={variantCount} />
+      <div className="flex flex-col gap-3">
+        <Link
+          href="/dashboard/experiments/new/csv"
+          className="group flex items-start gap-4 border border-foreground/15 rounded-xl p-5 hover:border-brand/50 hover:bg-brand/5 transition-colors"
+        >
+          <div className="mt-0.5 w-9 h-9 rounded-lg bg-foreground/8 flex items-center justify-center shrink-0 group-hover:bg-brand/10 transition-colors">
+            <svg className="w-5 h-5 text-foreground/50 group-hover:text-brand transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+            </svg>
+          </div>
+          <div>
+            <p className="font-medium text-sm">Upload CSV</p>
+            <p className="text-sm text-foreground/50 mt-0.5">Import experiment data from a spreadsheet or analytics export.</p>
+          </div>
+        </Link>
 
-        <div className="flex flex-col gap-1">
-          <label htmlFor="name" className={labelClass}>Experiment name</label>
-          <input
-            id="name"
-            name="name"
-            type="text"
-            required
-            placeholder="e.g. Homepage CTA button colour"
-            className={inputClass}
-          />
-        </div>
-
-        <div className="flex flex-col gap-3">
-          {Array.from({ length: variantCount }).map((_, i) => (
-            <div key={i} className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <input
-                  name={`variant_name_${i}`}
-                  type="text"
-                  required
-                  defaultValue={getDefaultName(i)}
-                  placeholder={getDefaultName(i)}
-                  className="text-sm font-semibold bg-transparent outline-none border-b border-transparent focus:border-foreground/20 transition-colors"
-                />
-                {i === variantCount - 1 && i >= 2 && (
-                  <button
-                    type="button"
-                    onClick={removeVariant}
-                    className="text-xs text-foreground/40 hover:text-red-500 transition-colors"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className={labelClass}>Visitors</label>
-                  <input
-                    name={`variant_visitors_${i}`}
-                    type="number"
-                    min="1"
-                    required
-                    placeholder="1000"
-                    className={inputClass}
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className={labelClass}>Conversions</label>
-                  <input
-                    name={`variant_conversions_${i}`}
-                    type="number"
-                    min="0"
-                    required
-                    placeholder={i === 0 ? '50' : '65'}
-                    className={inputClass}
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {variantCount < 6 && (
-          <button
-            type="button"
-            onClick={addVariant}
-            className="text-sm text-brand hover:opacity-75 transition-opacity text-left"
-          >
-            + Add variant
-          </button>
-        )}
-
-        <div className="flex flex-col gap-1">
-          <label htmlFor="confidence_level" className={labelClass}>Confidence level (%)</label>
-          <input
-            id="confidence_level"
-            name="confidence_level"
-            type="number"
-            min="50"
-            max="99.9"
-            step="0.1"
-            defaultValue="95"
-            required
-            className={inputClass}
-          />
-          <p className="text-xs text-foreground/40 mt-0.5">
-            How certain you want to be before calling a winner. 95 is the industry standard.
-          </p>
-        </div>
-
-        {state?.error && (
-          <p className="text-sm text-red-500">{state.error}</p>
-        )}
-
-        <SubmitButton pending={pending} label="Create experiment" pendingLabel="Creating..." />
-      </form>
+        <Link
+          href="/dashboard/experiments/new/single"
+          className="group flex items-start gap-4 border border-foreground/15 rounded-xl p-5 hover:border-brand/50 hover:bg-brand/5 transition-colors"
+        >
+          <div className="mt-0.5 w-9 h-9 rounded-lg bg-foreground/8 flex items-center justify-center shrink-0 group-hover:bg-brand/10 transition-colors">
+            <svg className="w-5 h-5 text-foreground/50 group-hover:text-brand transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+            </svg>
+          </div>
+          <div>
+            <p className="font-medium text-sm">Single comparison</p>
+            <p className="text-sm text-foreground/50 mt-0.5">Manually enter visitors and conversions for each variant.</p>
+          </div>
+        </Link>
+      </div>
     </div>
   )
 }
