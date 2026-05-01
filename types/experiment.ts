@@ -9,6 +9,8 @@ export type Variant = {
 export type CsvMetric = {
   name: string
   rates: number[]
+  visitors?: number[]
+  visitorGroupLabel?: string
 }
 
 export type CsvMetricResult = {

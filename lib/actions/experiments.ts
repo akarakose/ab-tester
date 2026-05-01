@@ -5,8 +5,20 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import type { Experiment, Variant } from '@/types/experiment'
+import type {
+  CsvExperimentInput,
+  CsvExperimentUpdateInput,
+  CsvMetricInput,
+  ExperimentActionState,
+  ExperimentFilters,
+  SortField,
+  SortOrder,
+} from './experiments.types'
 
-export type ExperimentActionState = { error?: string } | undefined
+const VALID_STATUSES = ['draft', 'running', 'concluded'] as const
+const STATUS_ORDER: Record<string, number> = { running: 0, draft: 1, concluded: 2 }
+const MAX_VARIANTS = 6
+const MIN_VARIANTS = 2
 
 const getAuthenticatedUser = cache(async () => {
   const supabase = await createClient()
@@ -15,11 +27,22 @@ const getAuthenticatedUser = cache(async () => {
   return { supabase, user: session.user }
 })
 
+function revalidateExperimentPaths(id?: string) {
+  revalidatePath('/dashboard/experiments')
+  if (id) revalidatePath(`/dashboard/experiments/${id}`)
+}
+
+function validateCommonFields({ name, confidence, status }: { name: string; confidence: number; status?: string }): string | null {
+  if (!name) return 'Experiment name is required.'
+  if (confidence < 50 || confidence >= 100) return 'Confidence level must be between 50 and 99.9.'
+  if (status !== undefined && !VALID_STATUSES.includes(status as typeof VALID_STATUSES[number])) return 'Invalid status.'
+  return null
+}
+
 function parseVariants(formData: FormData): { variants: Variant[] } | { error: string } {
-  const countRaw = formData.get('variant_count')
-  const count = Number(countRaw)
-  if (!Number.isInteger(count) || count < 2) return { error: 'At least 2 variants (control + one challenger) are required.' }
-  if (count > 6) return { error: 'Maximum 6 variants allowed.' }
+  const count = Number(formData.get('variant_count'))
+  if (!Number.isInteger(count) || count < MIN_VARIANTS) return { error: 'At least 2 variants (control + one challenger) are required.' }
+  if (count > MAX_VARIANTS) return { error: `Maximum ${MAX_VARIANTS} variants allowed.` }
 
   const variants: Variant[] = []
   for (let i = 0; i < count; i++) {
@@ -41,18 +64,31 @@ function parseVariants(formData: FormData): { variants: Variant[] } | { error: s
   return { variants }
 }
 
-const STATUS_ORDER: Record<string, number> = { running: 0, draft: 1, concluded: 2 }
+function validateCsvBase(input: { variantNames: string[]; metrics: CsvMetricInput[] }): string | null {
+  if (input.variantNames.length < MIN_VARIANTS) return 'At least 2 variants are required.'
+  if (input.metrics.length === 0) return 'At least one metric is required.'
 
-export type SortField = 'name' | 'created_at' | 'updated_at' | 'status'
-export type SortOrder = 'asc' | 'desc'
+  for (const m of input.metrics) {
+    if (m.visitors.length !== input.variantNames.length) return 'Each metric needs a visitor count for every variant.'
+    if (m.visitors.some(v => !Number.isFinite(v) || v <= 0)) return 'All visitor counts must be greater than 0.'
+  }
+  return null
+}
 
-export type ExperimentFilters = {
-  name?: string
-  status?: string
-  createdFrom?: string
-  createdTo?: string
-  updatedFrom?: string
-  updatedTo?: string
+function buildCsvPayload(variantNames: string[], metrics: CsvMetricInput[]): { variants: Variant[]; metrics: CsvMetricInput[] } {
+  const defaultVisitors = metrics[0].visitors
+  const variants: Variant[] = variantNames.map((name, i) => ({
+    name,
+    visitors: defaultVisitors[i],
+    conversions: 0,
+  }))
+  const cleanedMetrics = metrics.map(({ name, rates, visitors, visitorGroupLabel }) => ({
+    name,
+    rates,
+    visitors,
+    ...(visitorGroupLabel ? { visitorGroupLabel } : {}),
+  }))
+  return { variants, metrics: cleanedMetrics }
 }
 
 export async function getExperiments(
@@ -111,10 +147,10 @@ export async function createExperiment(
   const { supabase, user } = await getAuthenticatedUser()
 
   const name = (formData.get('name') as string)?.trim()
-  const confidencePct = Number(formData.get('confidence_level'))
+  const confidence = Number(formData.get('confidence_level'))
 
-  if (!name) return { error: 'Experiment name is required.' }
-  if (confidencePct < 50 || confidencePct >= 100) return { error: 'Confidence level must be between 50 and 99.9.' }
+  const baseError = validateCommonFields({ name, confidence })
+  if (baseError) return { error: baseError }
 
   const parsed = parseVariants(formData)
   if ('error' in parsed) return { error: parsed.error }
@@ -124,12 +160,12 @@ export async function createExperiment(
     name,
     status: 'draft',
     variants: parsed.variants,
-    confidence_level: confidencePct / 100,
+    confidence_level: confidence / 100,
   })
 
   if (error) return { error: error.message }
 
-  revalidatePath('/dashboard/experiments')
+  revalidateExperimentPaths()
   redirect('/dashboard/experiments')
 }
 
@@ -141,12 +177,11 @@ export async function updateExperiment(
   const { supabase } = await getAuthenticatedUser()
 
   const name = (formData.get('name') as string)?.trim()
-  const confidencePct = Number(formData.get('confidence_level'))
+  const confidence = Number(formData.get('confidence_level'))
   const status = formData.get('status') as string
 
-  if (!name) return { error: 'Experiment name is required.' }
-  if (confidencePct < 50 || confidencePct >= 100) return { error: 'Confidence level must be between 50 and 99.9.' }
-  if (!['draft', 'running', 'concluded'].includes(status)) return { error: 'Invalid status.' }
+  const baseError = validateCommonFields({ name, confidence, status })
+  if (baseError) return { error: baseError }
 
   const parsed = parseVariants(formData)
   if ('error' in parsed) return { error: parsed.error }
@@ -157,48 +192,29 @@ export async function updateExperiment(
       name,
       status,
       variants: parsed.variants,
-      confidence_level: confidencePct / 100,
+      confidence_level: confidence / 100,
     })
     .eq('id', id)
 
   if (error) return { error: error.message }
 
-  revalidatePath('/dashboard/experiments')
-  revalidatePath(`/dashboard/experiments/${id}`)
+  revalidateExperimentPaths(id)
   redirect(`/dashboard/experiments/${id}`)
-}
-
-export type CsvExperimentInput = {
-  experimentName: string
-  variantNames: string[]
-  visitors: number[]
-  metrics: { metric: string; values: number[] }[]
-  confidenceLevel: number
 }
 
 export async function createExperimentsFromCsv(
   input: CsvExperimentInput
 ): Promise<{ error?: string }> {
   const { supabase, user } = await getAuthenticatedUser()
+  const { experimentName, variantNames, metrics, confidenceLevel } = input
 
-  const { experimentName, variantNames, visitors, metrics, confidenceLevel } = input
+  const baseError = validateCommonFields({ name: experimentName, confidence: confidenceLevel })
+  if (baseError) return { error: baseError }
 
-  if (!experimentName) return { error: 'Experiment name is required.' }
-  if (confidenceLevel < 50 || confidenceLevel >= 100) return { error: 'Confidence level must be between 50 and 99.9.' }
-  if (variantNames.length < 2) return { error: 'At least 2 variants are required.' }
-  if (visitors.some(v => v <= 0)) return { error: 'All visitor counts must be greater than 0.' }
-  if (metrics.length === 0) return { error: 'CSV has no data rows.' }
+  const csvError = validateCsvBase({ variantNames, metrics })
+  if (csvError) return { error: csvError }
 
-  const variants: Variant[] = variantNames.map((name, i) => ({
-    name,
-    visitors: visitors[i],
-    conversions: 0,
-  }))
-
-  const csvMetrics = metrics.map(({ metric, values }) => ({
-    name: metric,
-    rates: values,
-  }))
+  const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
 
   const { error } = await supabase.from('experiments').insert({
     user_id: user.id,
@@ -211,17 +227,8 @@ export async function createExperimentsFromCsv(
 
   if (error) return { error: error.message }
 
-  revalidatePath('/dashboard/experiments')
+  revalidateExperimentPaths()
   return {}
-}
-
-export type CsvExperimentUpdateInput = {
-  name: string
-  status: string
-  variantNames: string[]
-  visitors: number[]
-  metrics: { name: string; rates: number[] }[]
-  confidenceLevel: number
 }
 
 export async function updateCsvExperiment(
@@ -229,31 +236,24 @@ export async function updateCsvExperiment(
   input: CsvExperimentUpdateInput
 ): Promise<{ error?: string }> {
   const { supabase } = await getAuthenticatedUser()
+  const { name, status, variantNames, metrics, confidenceLevel } = input
 
-  const { name, status, variantNames, visitors, metrics, confidenceLevel } = input
+  const baseError = validateCommonFields({ name, confidence: confidenceLevel, status })
+  if (baseError) return { error: baseError }
 
-  if (!name) return { error: 'Experiment name is required.' }
-  if (confidenceLevel < 50 || confidenceLevel >= 100) return { error: 'Confidence level must be between 50 and 99.9.' }
-  if (!['draft', 'running', 'concluded'].includes(status)) return { error: 'Invalid status.' }
-  if (variantNames.length < 2) return { error: 'At least 2 variants are required.' }
-  if (visitors.some(v => v <= 0)) return { error: 'All visitor counts must be greater than 0.' }
-  if (metrics.length === 0) return { error: 'At least one metric is required.' }
+  const csvError = validateCsvBase({ variantNames, metrics })
+  if (csvError) return { error: csvError }
 
-  const variants: Variant[] = variantNames.map((vName, i) => ({
-    name: vName,
-    visitors: visitors[i],
-    conversions: 0,
-  }))
+  const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
 
   const { error } = await supabase
     .from('experiments')
-    .update({ name, status, variants, metrics, confidence_level: confidenceLevel / 100 })
+    .update({ name, status, variants, metrics: csvMetrics, confidence_level: confidenceLevel / 100 })
     .eq('id', id)
 
   if (error) return { error: error.message }
 
-  revalidatePath('/dashboard/experiments')
-  revalidatePath(`/dashboard/experiments/${id}`)
+  revalidateExperimentPaths(id)
   redirect(`/dashboard/experiments/${id}`)
 }
 
@@ -264,6 +264,6 @@ export async function deleteExperiment(id: string): Promise<{ error: string } | 
     .update({ deleted_at: new Date().toISOString() })
     .eq('id', id)
   if (error) return { error: error.message }
-  revalidatePath('/dashboard/experiments')
+  revalidateExperimentPaths()
   redirect('/dashboard/experiments')
 }

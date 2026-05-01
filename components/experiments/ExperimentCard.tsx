@@ -10,7 +10,12 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
 
   if (isCsv) {
     const csvResults = calculateCsvMetricResults(experiment.variants, experiment.metrics!, experiment.confidence_level)
-    const significantCount = csvResults.filter(r => r.challengers.some(c => c.is_significant)).length
+    const challengers = experiment.variants.slice(1)
+    const significantPerVariant = challengers.map((v, i) => ({
+      name: v.name,
+      count: csvResults.filter(r => r.challengers[i]?.is_significant).length,
+    }))
+    const anySignificant = significantPerVariant.some(v => v.count > 0)
     const displayedResults = csvResults.slice(0, 5)
     const hiddenCount = csvResults.length - displayedResults.length
 
@@ -69,12 +74,29 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
           )}
         </div>
 
-        <div className="mt-3 flex items-center gap-1.5">
-          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${significantCount > 0 ? 'bg-green-500' : 'bg-foreground/20'}`} />
-          <p className="text-xs text-foreground/50">
-            {significantCount > 0 ? `${significantCount} of ${csvResults.length} metrics significant` : 'No significant metrics yet'}
-            {' · '}{experiment.metrics!.length} metrics · {experiment.variants.length} variants
-          </p>
+        <div className="mt-3 flex items-start gap-1.5">
+          <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 ${anySignificant ? 'bg-green-500' : 'bg-foreground/20'}`} />
+          <div className="text-xs text-foreground/50">
+            {challengers.length === 1 ? (
+              <p>
+                {significantPerVariant[0].count > 0
+                  ? `${significantPerVariant[0].count} of ${csvResults.length} metrics significant`
+                  : 'No significant metrics yet'}
+                {' · '}{experiment.metrics!.length} metrics · {experiment.variants.length} variants
+              </p>
+            ) : (
+              <>
+                {significantPerVariant.map(v => (
+                  <p key={v.name}>
+                    {v.count > 0
+                      ? `${v.count} of ${csvResults.length} metrics significant in ${v.name}`
+                      : `No significant metrics in ${v.name}`}
+                  </p>
+                ))}
+                <p>{experiment.metrics!.length} metrics · {experiment.variants.length} variants</p>
+              </>
+            )}
+          </div>
         </div>
       </Link>
     )

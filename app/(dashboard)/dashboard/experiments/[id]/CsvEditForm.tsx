@@ -8,22 +8,48 @@ import SubmitButton from '@/components/ui/SubmitButton'
 const inputClass = 'border border-foreground/20 rounded-lg px-3 py-2 bg-background text-foreground text-sm outline-none focus:ring-2 focus:ring-brand w-full'
 const labelClass = 'text-sm font-medium'
 
-type MetricRow = { name: string; rates: number[] }
+type MetricRow = { name: string; rates: number[]; groupId: number }
+type VisitorGroup = { id: number; visitors: number[]; label: string }
+
+function arraysEqual(a: number[], b: number[]) {
+  return a.length === b.length && a.every((v, i) => v === b[i])
+}
+
+function initState(experiment: Experiment) {
+  const variantVisitors = experiment.variants.map(v => v.visitors)
+  const groups: VisitorGroup[] = []
+  const metrics: MetricRow[] = []
+  let nextId = 1
+
+  for (const m of experiment.metrics!) {
+    const visitors = m.visitors && m.visitors.length === variantVisitors.length ? m.visitors : variantVisitors
+    const existing = groups.find(g => arraysEqual(g.visitors, visitors))
+    const groupId = existing ? existing.id : (() => {
+      const id = nextId++
+      groups.push({ id, visitors: [...visitors], label: m.visitorGroupLabel ?? '' })
+      return id
+    })()
+    metrics.push({ name: m.name, rates: [...m.rates], groupId })
+  }
+
+  if (groups.length === 0) {
+    groups.push({ id: nextId++, visitors: variantVisitors, label: '' })
+  }
+
+  return { groups, metrics, nextId }
+}
 
 export default function CsvEditForm({ experiment }: { experiment: Experiment }) {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
   const [variantNames, setVariantNames] = useState(experiment.variants.map(v => v.name))
-  const [visitors, setVisitors] = useState(experiment.variants.map(v => v.visitors))
-  const [metrics, setMetrics] = useState<MetricRow[]>(
-    experiment.metrics!.map(m => ({ name: m.name, rates: [...m.rates] }))
-  )
+  const initial = useState(() => initState(experiment))[0]
+  const [groups, setGroups] = useState<VisitorGroup[]>(initial.groups)
+  const [metrics, setMetrics] = useState<MetricRow[]>(initial.metrics)
+  const [nextGroupId, setNextGroupId] = useState(initial.nextId)
 
   const updateVariantName = (i: number, val: string) =>
     setVariantNames(prev => prev.map((n, idx) => idx === i ? val : n))
-
-  const updateVisitors = (i: number, val: number) =>
-    setVisitors(prev => prev.map((v, idx) => idx === i ? val : v))
 
   const updateMetricName = (mi: number, val: string) =>
     setMetrics(prev => prev.map((m, idx) => idx === mi ? { ...m, name: val } : m))
@@ -34,10 +60,34 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
     ))
 
   const addMetric = () =>
-    setMetrics(prev => [...prev, { name: '', rates: new Array(variantNames.length).fill(0) }])
+    setMetrics(prev => [...prev, { name: '', rates: new Array(variantNames.length).fill(0), groupId: groups[0].id }])
 
   const removeMetric = (i: number) =>
     setMetrics(prev => prev.filter((_, idx) => idx !== i))
+
+  const updateGroupVisitor = (groupId: number, vi: number, val: number) =>
+    setGroups(prev => prev.map(g => g.id === groupId
+      ? { ...g, visitors: g.visitors.map((v, i) => i === vi ? val : v) }
+      : g))
+
+  const updateGroupLabel = (groupId: number, val: string) =>
+    setGroups(prev => prev.map(g => g.id === groupId ? { ...g, label: val } : g))
+
+  const moveMetricToGroup = (metricIdx: number, targetGroupId: number) =>
+    setMetrics(prev => prev.map((m, idx) => idx === metricIdx ? { ...m, groupId: targetGroupId } : m))
+
+  const addGroup = () => {
+    const id = nextGroupId
+    setNextGroupId(id + 1)
+    setGroups(prev => [...prev, { id, visitors: new Array(variantNames.length).fill(0), label: '' }])
+  }
+
+  const removeGroup = (groupId: number) => {
+    if (groups.length <= 1) return
+    const fallbackId = groups.find(g => g.id !== groupId)!.id
+    setMetrics(prev => prev.map(m => m.groupId === groupId ? { ...m, groupId: fallbackId } : m))
+    setGroups(prev => prev.filter(g => g.id !== groupId))
+  }
 
   const handleSubmit = (e: { preventDefault(): void; currentTarget: HTMLFormElement }) => {
     e.preventDefault()
@@ -49,7 +99,6 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
     if (!name) { setError('Experiment name is required.'); return }
     if (confidence < 50 || confidence >= 100) { setError('Confidence level must be between 50 and 99.9.'); return }
     if (variantNames.some(n => !n.trim())) { setError('All variant names are required.'); return }
-    if (visitors.some(v => !v || v <= 0)) { setError('All visitor counts must be greater than 0.'); return }
     if (metrics.length === 0) { setError('At least one metric is required.'); return }
     if (metrics.some(m => !m.name.trim())) { setError('All metrics must have a name.'); return }
     if (metrics.some(m => m.rates.some(r => isNaN(r) || r < 0 || r > 100))) {
@@ -57,19 +106,31 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
       return
     }
 
+    const activeGroupIds = new Set(metrics.map(m => m.groupId))
+    const activeGroups = groups.filter(g => activeGroupIds.has(g.id))
+    if (activeGroups.some(g => g.visitors.some(v => !v || v <= 0))) {
+      setError('All visitor counts must be greater than 0.'); return
+    }
+
+    const metricsPayload = metrics.map(m => {
+      const group = groups.find(g => g.id === m.groupId)!
+      return { name: m.name, rates: m.rates, visitors: group.visitors, visitorGroupLabel: group.label || undefined }
+    })
+
     setError(null)
     startTransition(async () => {
       const result = await updateCsvExperiment(experiment.id, {
         name,
         status,
         variantNames,
-        visitors,
-        metrics,
+        metrics: metricsPayload,
         confidenceLevel: confidence,
       })
       if (result?.error) setError(result.error)
     })
   }
+
+  const showGroupAssignment = groups.length > 1
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-5">
@@ -90,25 +151,102 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
       <div className="flex flex-col gap-2">
         <label className={labelClass}>Variants</label>
         {variantNames.map((vName, i) => (
-          <div key={i} className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-3">
+          <div key={i} className="border border-foreground/10 rounded-xl p-4">
             <input
               type="text"
               value={vName}
               onChange={e => updateVariantName(i, e.target.value)}
               placeholder={`Variant ${i + 1}`}
-              className="text-sm font-semibold bg-transparent outline-none border-b border-transparent focus:border-foreground/20 transition-colors"
+              className="text-sm font-semibold bg-transparent outline-none border-b border-transparent focus:border-foreground/20 transition-colors w-full"
             />
-            <div className="flex flex-col gap-1">
-              <label className={labelClass}>Visitors</label>
-              <input
-                type="number" min="1" required
-                value={visitors[i]}
-                onChange={e => updateVisitors(i, Number(e.target.value))}
-                className={inputClass}
-              />
-            </div>
           </div>
         ))}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-baseline justify-between">
+          <label className={labelClass}>Visitors per variant</label>
+          <p className="text-xs text-foreground/40">
+            {groups.length === 1 ? 'Same visitors for all metrics' : `${groups.length} groups`}
+          </p>
+        </div>
+        <div className="flex flex-col gap-3">
+          {groups.map((group, gi) => {
+            const metricsInGroup = metrics.filter(m => m.groupId === group.id)
+            return (
+              <div key={group.id} className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={group.label}
+                    onChange={e => updateGroupLabel(group.id, e.target.value)}
+                    placeholder={groups.length === 1 ? 'Group name (optional)' : `Group ${gi + 1}`}
+                    className="flex-1 text-sm font-medium bg-transparent outline-none border-b border-transparent focus:border-foreground/20 transition-colors placeholder:font-normal placeholder:text-foreground/30"
+                  />
+                  {groups.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeGroup(group.id)}
+                      className="text-xs text-foreground/40 hover:text-red-500 transition-colors shrink-0"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  {variantNames.map((vName, vi) => (
+                    <div key={vi} className="flex items-center gap-3">
+                      <span className="text-sm text-foreground/60 w-32 shrink-0 truncate">{vName || `Variant ${vi + 1}`}</span>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={group.visitors[vi] || ''}
+                        onChange={e => updateGroupVisitor(group.id, vi, Number(e.target.value))}
+                        className={inputClass}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {showGroupAssignment && (
+                  <div className="flex flex-col gap-1.5 pt-1">
+                    <p className="text-xs text-foreground/50">
+                      Applies to {metricsInGroup.length === 0 ? 'no metrics yet' : `${metricsInGroup.length} metric${metricsInGroup.length !== 1 ? 's' : ''}`}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {metrics.map((m, mi) => {
+                        const isHere = m.groupId === group.id
+                        return (
+                          <button
+                            key={mi}
+                            type="button"
+                            onClick={() => moveMetricToGroup(mi, group.id)}
+                            className={`text-xs px-2 py-1 rounded-md border transition-colors ${
+                              isHere
+                                ? 'border-brand bg-brand/10 text-foreground'
+                                : 'border-foreground/15 text-foreground/50 hover:border-foreground/35 hover:text-foreground/70'
+                            }`}
+                          >
+                            {m.name || `Metric ${mi + 1}`}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          {groups.length < Math.max(metrics.length, 1) && (
+            <button
+              type="button"
+              onClick={addGroup}
+              className="text-sm text-brand hover:opacity-75 transition-opacity text-left"
+            >
+              + Add visitor group
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-col gap-2">
