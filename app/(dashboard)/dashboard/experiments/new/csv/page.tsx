@@ -24,11 +24,17 @@ function parseCsv(text: string): ParsedCsv | string {
   const variantNames = header.slice(1).filter(Boolean)
   if (variantNames.length < 2) return 'CSV must have at least two variant columns.'
 
+  if (variantNames.some(n => /<[^>]*>/.test(n)))
+    return 'Column headers must be plain text with no HTML tags.'
+
   const rows: ParsedCsv['rows'] = []
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.trim())
     const metric = cols[0]
     if (!metric) continue
+
+    if (/<[^>]*>/.test(metric))
+      return `Row ${i + 1}: metric names must be plain text with no HTML tags.`
 
     const values = cols.slice(1, variantNames.length + 1).map(v => parseFloat(v))
     if (values.some(v => isNaN(v))) return `Row ${i + 1} ("${metric}") contains non-numeric values.`
