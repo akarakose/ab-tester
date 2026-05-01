@@ -15,10 +15,17 @@ import type {
   SortOrder,
 } from './experiments.types'
 
+function sanitizeText(value: string): string {
+  return value.replace(/<[^>]*>/g, '')
+}
+
 const VALID_STATUSES = ['draft', 'running', 'concluded'] as const
 const STATUS_ORDER: Record<string, number> = { running: 0, draft: 1, concluded: 2 }
 const MAX_VARIANTS = 6
 const MIN_VARIANTS = 2
+const MAX_METRICS = 300
+const MAX_NAME_LENGTH = 200
+const MAX_LABEL_LENGTH = 100
 
 const getAuthenticatedUser = cache(async () => {
   const supabase = await createClient()
@@ -34,7 +41,8 @@ function revalidateExperimentPaths(id?: string) {
 
 function validateCommonFields({ name, confidence, status }: { name: string; confidence: number; status?: string }): string | null {
   if (!name) return 'Experiment name is required.'
-  if (confidence < 50 || confidence >= 100) return 'Confidence level must be between 50 and 99.9.'
+  if (name.length > MAX_NAME_LENGTH) return `Experiment name must be ${MAX_NAME_LENGTH} characters or fewer.`
+  if (!Number.isFinite(confidence) || confidence < 50 || confidence >= 100) return 'Confidence level must be between 50 and 99.9.'
   if (status !== undefined && !VALID_STATUSES.includes(status as typeof VALID_STATUSES[number])) return 'Invalid status.'
   return null
 }
@@ -46,13 +54,13 @@ function parseVariants(formData: FormData): { variants: Variant[] } | { error: s
 
   const variants: Variant[] = []
   for (let i = 0; i < count; i++) {
-    const name = (formData.get(`variant_name_${i}`) as string)?.trim()
+    const name = sanitizeText((formData.get(`variant_name_${i}`) as string)?.trim() ?? '')
     const visitors = Number(formData.get(`variant_visitors_${i}`))
     const conversions = Number(formData.get(`variant_conversions_${i}`))
 
     if (!name) return { error: `Variant ${i + 1} must have a name.` }
-    if (visitors <= 0) return { error: `"${name}" visitors must be greater than 0.` }
-    if (conversions < 0) return { error: `"${name}" conversions cannot be negative.` }
+    if (!Number.isFinite(visitors) || !Number.isInteger(visitors) || visitors <= 0) return { error: `"${name}" visitors must be a whole number greater than 0.` }
+    if (!Number.isFinite(conversions) || !Number.isInteger(conversions) || conversions < 0) return { error: `"${name}" conversions must be a whole number that is not negative.` }
     if (conversions > visitors) return { error: `"${name}" conversions cannot exceed visitors.` }
 
     variants.push({ name, visitors, conversions })
@@ -65,10 +73,26 @@ function parseVariants(formData: FormData): { variants: Variant[] } | { error: s
 }
 
 function validateCsvBase(input: { variantNames: string[]; metrics: CsvMetricInput[] }): string | null {
+  if (!Array.isArray(input.variantNames) || !Array.isArray(input.metrics)) return 'Invalid input shape.'
   if (input.variantNames.length < MIN_VARIANTS) return 'At least 2 variants are required.'
+  if (input.variantNames.length > MAX_VARIANTS) return `Maximum ${MAX_VARIANTS} variants allowed.`
+  if (input.variantNames.some(n => typeof n !== 'string')) return 'Variant names must be strings.'
+  if (input.variantNames.some(n => n.length > MAX_NAME_LENGTH)) return `Variant names must be ${MAX_NAME_LENGTH} characters or fewer.`
+
+  const uniqueVariants = new Set(input.variantNames.map(n => n.toLowerCase()))
+  if (uniqueVariants.size !== input.variantNames.length) return 'Variant names must be unique.'
+
   if (input.metrics.length === 0) return 'At least one metric is required.'
+  if (input.metrics.length > MAX_METRICS) return `Maximum ${MAX_METRICS} metrics allowed.`
 
   for (const m of input.metrics) {
+    if (typeof m.name !== 'string') return 'Metric names must be strings.'
+    if (m.name.length > MAX_NAME_LENGTH) return `Metric names must be ${MAX_NAME_LENGTH} characters or fewer.`
+    if (m.visitorGroupLabel !== undefined && (typeof m.visitorGroupLabel !== 'string' || m.visitorGroupLabel.length > MAX_LABEL_LENGTH))
+      return `Visitor group labels must be strings of ${MAX_LABEL_LENGTH} characters or fewer.`
+    if (!Array.isArray(m.rates) || !Array.isArray(m.visitors)) return `Metric "${m.name}" has invalid shape.`
+    if (m.rates.length !== input.variantNames.length) return `Metric "${m.name}" needs a rate for every variant.`
+    if (m.rates.some(r => !Number.isFinite(r) || r < 0 || r > 100)) return `Metric "${m.name}" has invalid rates — values must be between 0 and 100.`
     if (m.visitors.length !== input.variantNames.length) return 'Each metric needs a visitor count for every variant.'
     if (m.visitors.some(v => !Number.isFinite(v) || v <= 0)) return 'All visitor counts must be greater than 0.'
   }
@@ -146,7 +170,7 @@ export async function createExperiment(
 ): Promise<ExperimentActionState> {
   const { supabase, user } = await getAuthenticatedUser()
 
-  const name = (formData.get('name') as string)?.trim()
+  const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
   const confidence = Number(formData.get('confidence_level'))
 
   const baseError = validateCommonFields({ name, confidence })
@@ -176,7 +200,7 @@ export async function updateExperiment(
 ): Promise<ExperimentActionState> {
   const { supabase } = await getAuthenticatedUser()
 
-  const name = (formData.get('name') as string)?.trim()
+  const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
   const confidence = Number(formData.get('confidence_level'))
   const status = formData.get('status') as string
 
@@ -206,7 +230,15 @@ export async function createExperimentsFromCsv(
   input: CsvExperimentInput
 ): Promise<{ error?: string }> {
   const { supabase, user } = await getAuthenticatedUser()
-  const { experimentName, variantNames, metrics, confidenceLevel } = input
+  const experimentName = sanitizeText(input.experimentName)
+  const variantNames = input.variantNames.map(sanitizeText)
+  const metrics = input.metrics.map(m => ({
+    name: sanitizeText(m.name),
+    rates: m.rates,
+    visitors: m.visitors,
+    ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
+  }))
+  const { confidenceLevel } = input
 
   const baseError = validateCommonFields({ name: experimentName, confidence: confidenceLevel })
   if (baseError) return { error: baseError }
@@ -236,7 +268,15 @@ export async function updateCsvExperiment(
   input: CsvExperimentUpdateInput
 ): Promise<{ error?: string }> {
   const { supabase } = await getAuthenticatedUser()
-  const { name, status, variantNames, metrics, confidenceLevel } = input
+  const name = sanitizeText(input.name)
+  const variantNames = input.variantNames.map(sanitizeText)
+  const metrics = input.metrics.map(m => ({
+    name: sanitizeText(m.name),
+    rates: m.rates,
+    visitors: m.visitors,
+    ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
+  }))
+  const { status, confidenceLevel } = input
 
   const baseError = validateCommonFields({ name, confidence: confidenceLevel, status })
   if (baseError) return { error: baseError }
