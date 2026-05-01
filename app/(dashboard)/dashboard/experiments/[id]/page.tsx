@@ -34,8 +34,21 @@ export default async function ExperimentPage({
 
   if (isCsv) {
     const csvResults = calculateCsvMetricResults(experiment.variants, experiment.metrics!, experiment.confidence_level)
-    const significantCount = csvResults.filter(r => r.challengers.some(c => c.is_significant)).length
     const challengers = experiment.variants.slice(1)
+    const significantPerVariant = challengers.map((v, i) => ({
+      name: v.name,
+      count: csvResults.filter(r => r.challengers[i]?.is_significant).length,
+    }))
+    const anySignificant = significantPerVariant.some(v => v.count > 0)
+
+    const variantVisitorsFallback = experiment.variants.map(v => v.visitors)
+    const visitorGroups: { visitors: number[]; metricNames: string[]; label: string }[] = []
+    for (const m of experiment.metrics!) {
+      const visitors = m.visitors && m.visitors.length === variantVisitorsFallback.length ? m.visitors : variantVisitorsFallback
+      const existing = visitorGroups.find(g => g.visitors.length === visitors.length && g.visitors.every((v, i) => v === visitors[i]))
+      if (existing) existing.metricNames.push(m.name)
+      else visitorGroups.push({ visitors: [...visitors], metricNames: [m.name], label: m.visitorGroupLabel ?? '' })
+    }
 
     return (
       <div className="max-w-3xl mx-auto px-6 py-8">
@@ -58,17 +71,32 @@ export default async function ExperimentPage({
         <div className="border border-foreground/10 rounded-xl p-5 mb-8">
           <h2 className="font-semibold mb-4">Results</h2>
 
-          <div className={`rounded-lg p-4 mb-5 ${significantCount > 0 ? 'bg-green-50 dark:bg-green-900/20' : 'bg-foreground/5'}`}>
-            <p className={`font-semibold ${significantCount > 0 ? 'text-green-700 dark:text-green-400' : 'text-foreground/60'}`}>
-              {significantCount > 0
-                ? `${significantCount} of ${csvResults.length} metrics significant`
-                : 'No significant metrics yet'}
-            </p>
-            <p className="text-sm text-foreground/50 mt-0.5">
-              {significantCount > 0
-                ? `At ${confidencePct}% confidence · ${experiment.variants[0].name}: ${experiment.variants[0].visitors.toLocaleString()} visitors`
-                : `More data needed to reach ${confidencePct}% confidence.`}
-            </p>
+          <div className={`rounded-lg p-4 mb-5 ${anySignificant ? 'bg-green-50 dark:bg-green-900/20' : 'bg-foreground/5'}`}>
+            {anySignificant ? (
+              <>
+                {challengers.length === 1 ? (
+                  <p className="font-semibold text-green-700 dark:text-green-400">
+                    {significantPerVariant[0].count} of {csvResults.length} metrics significant
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-0.5">
+                    {significantPerVariant.map(v => (
+                      <p key={v.name} className={`font-semibold ${v.count > 0 ? 'text-green-700 dark:text-green-400' : 'text-foreground/60'}`}>
+                        {v.count > 0
+                          ? `${v.count} of ${csvResults.length} metrics significant in ${v.name}`
+                          : `No significant metrics in ${v.name}`}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                <p className="text-sm text-foreground/50 mt-1">At {confidencePct}% confidence</p>
+              </>
+            ) : (
+              <>
+                <p className="font-semibold text-foreground/60">No significant metrics yet</p>
+                <p className="text-sm text-foreground/50 mt-0.5">More data needed to reach {confidencePct}% confidence.</p>
+              </>
+            )}
           </div>
 
           <div className="overflow-x-auto [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-foreground/5 [&::-webkit-scrollbar-thumb]:bg-foreground/20 [&::-webkit-scrollbar-thumb]:rounded-full">
@@ -123,9 +151,22 @@ export default async function ExperimentPage({
             <p className="text-xs text-foreground/30 mt-2 text-right">scroll to see all variants →</p>
           )}
 
-          <p className="text-xs text-foreground/40 mt-4">
-            Confidence level: {confidencePct}% · Visitors per variant: {experiment.variants.map(v => `${v.name} ${v.visitors.toLocaleString()}`).join(', ')}
-          </p>
+          <div className="text-xs text-foreground/40 mt-4 flex flex-col gap-0.5">
+            <p>Confidence level: {confidencePct}%</p>
+            {visitorGroups.length === 1 ? (
+              <p>
+                {visitorGroups[0].label && <span className="text-foreground/60">{visitorGroups[0].label}: </span>}
+                Visitors per variant: {experiment.variants.map((v, i) => `${v.name} ${visitorGroups[0].visitors[i].toLocaleString()}`).join(', ')}
+              </p>
+            ) : (
+              visitorGroups.map((g, gi) => (
+                <p key={gi}>
+                  <span className="text-foreground/60">{g.label || g.metricNames.join(', ')}:</span>{' '}
+                  {experiment.variants.map((v, vi) => `${v.name} ${g.visitors[vi].toLocaleString()}`).join(', ')}
+                </p>
+              ))
+            )}
+          </div>
         </div>
 
         <div className="border border-foreground/10 rounded-xl p-5">

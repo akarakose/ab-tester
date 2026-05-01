@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTransition } from 'react'
-import type { SortField, SortOrder } from '@/lib/actions/experiments'
+import type { SortField, SortOrder } from '@/lib/actions/experiments.types'
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: 'created_at', label: 'Date created' },

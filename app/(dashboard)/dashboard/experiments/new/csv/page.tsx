@@ -14,6 +14,8 @@ type ParsedCsv = {
   rows: { metric: string; values: number[] }[]
 }
 
+type VisitorGroup = { visitors: number[]; metricIndices: number[]; label: string }
+
 function parseCsv(text: string): ParsedCsv | string {
   const lines = text.trim().split('\n').filter(l => l.trim())
   if (lines.length < 2) return 'CSV must have a header row and at least one data row.'
@@ -46,6 +48,7 @@ export default function NewExperimentCsvPage() {
   const [parsed, setParsed] = useState<ParsedCsv | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [groups, setGroups] = useState<VisitorGroup[]>([])
   const [isPending, startTransition] = useTransition()
 
   const handleFile = (file: File) => {
@@ -60,14 +63,53 @@ export default function NewExperimentCsvPage() {
       if (typeof result === 'string') {
         setParseError(result)
         setParsed(null)
+        setGroups([])
       } else {
         setParsed(result)
+        setGroups([{
+          visitors: result.variantNames.map(() => 0),
+          metricIndices: result.rows.map((_, i) => i),
+          label: '',
+        }])
         setParseError(null)
         setSubmitError(null)
       }
     }
     reader.readAsText(file)
   }
+
+  const updateGroupVisitor = (gi: number, vi: number, value: number) =>
+    setGroups(prev => prev.map((g, idx) => idx === gi
+      ? { ...g, visitors: g.visitors.map((v, i) => i === vi ? value : v) }
+      : g))
+
+  const updateGroupLabel = (gi: number, value: string) =>
+    setGroups(prev => prev.map((g, idx) => idx === gi ? { ...g, label: value } : g))
+
+  const moveMetricToGroup = (metricIdx: number, targetGi: number) =>
+    setGroups(prev => prev.map((g, gi) => ({
+      ...g,
+      metricIndices: gi === targetGi
+        ? Array.from(new Set([...g.metricIndices, metricIdx])).sort((a, b) => a - b)
+        : g.metricIndices.filter(m => m !== metricIdx),
+    })))
+
+  const addGroup = () => {
+    if (!parsed) return
+    setGroups(prev => [...prev, { visitors: parsed.variantNames.map(() => 0), metricIndices: [], label: '' }])
+  }
+
+  const removeGroup = (gi: number) =>
+    setGroups(prev => {
+      const removed = prev[gi]
+      const next = prev.filter((_, idx) => idx !== gi)
+      if (next.length === 0) return prev
+      next[0] = {
+        ...next[0],
+        metricIndices: Array.from(new Set([...next[0].metricIndices, ...removed.metricIndices])).sort((a, b) => a - b),
+      }
+      return next
+    })
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
@@ -83,21 +125,29 @@ export default function NewExperimentCsvPage() {
     const form = e.currentTarget
     const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim()
     const confidence = Number((form.elements.namedItem('confidence_level') as HTMLInputElement).value)
-    const visitors = parsed.variantNames.map((_, i) =>
-      Number((form.elements.namedItem(`visitors_${i}`) as HTMLInputElement).value)
-    )
 
     if (!name) { setSubmitError('Experiment name is required.'); return }
     if (confidence < 50 || confidence >= 100) { setSubmitError('Confidence level must be between 50 and 99.9.'); return }
-    if (visitors.some(v => !v || v <= 0)) { setSubmitError('All visitor counts must be greater than 0.'); return }
+
+    const activeGroups = groups.filter(g => g.metricIndices.length > 0)
+    if (activeGroups.some(g => g.visitors.some(v => !v || v <= 0))) {
+      setSubmitError('All visitor counts must be greater than 0.'); return
+    }
+
+    const metricsWithVisitors = parsed.rows.map((row, mi) => {
+      const group = activeGroups.find(g => g.metricIndices.includes(mi))
+      return group ? { name: row.metric, rates: row.values, visitors: group.visitors, visitorGroupLabel: group.label || undefined } : null
+    })
+    if (metricsWithVisitors.some(m => m === null)) {
+      setSubmitError('Every metric must be assigned to a visitor group.'); return
+    }
 
     setSubmitError(null)
     startTransition(async () => {
       const result = await createExperimentsFromCsv({
         experimentName: name,
         variantNames: parsed.variantNames,
-        visitors,
-        metrics: parsed.rows,
+        metrics: metricsWithVisitors as { name: string; rates: number[]; visitors: number[]; visitorGroupLabel?: string }[],
         confidenceLevel: confidence,
       })
       if (result?.error) {
@@ -161,7 +211,7 @@ export default function NewExperimentCsvPage() {
               <p className="text-sm font-medium">{parsed.rows.length} metric{parsed.rows.length !== 1 ? 's' : ''} detected</p>
               <button
                 type="button"
-                onClick={() => { setParsed(null); setParseError(null) }}
+                onClick={() => { setParsed(null); setParseError(null); setGroups([]) }}
                 className="text-xs text-foreground/40 hover:text-foreground transition-colors"
               >
                 Upload different file
@@ -204,23 +254,88 @@ export default function NewExperimentCsvPage() {
             />
           </div>
 
-          {/* Visitors per variant */}
+          {/* Visitor groups */}
           <div className="flex flex-col gap-2">
-            <label className={labelClass}>Visitors per variant</label>
-            <div className="flex flex-col gap-2">
-              {parsed.variantNames.map((name, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <span className="text-sm text-foreground/60 w-32 shrink-0 truncate">{name}</span>
-                  <input
-                    name={`visitors_${i}`}
-                    type="number"
-                    min="1"
-                    required
-                    placeholder="e.g. 10000"
-                    className={inputClass}
-                  />
+            <div className="flex items-baseline justify-between">
+              <label className={labelClass}>Visitors per variant</label>
+              <p className="text-xs text-foreground/40">
+                {groups.length === 1 ? 'Same visitors for all metrics' : `${groups.length} groups`}
+              </p>
+            </div>
+            <div className="flex flex-col gap-3">
+              {groups.map((group, gi) => (
+                <div key={gi} className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={group.label}
+                      onChange={e => updateGroupLabel(gi, e.target.value)}
+                      placeholder={groups.length === 1 ? 'Group name (optional)' : `Group ${gi + 1}`}
+                      className="flex-1 text-sm font-medium bg-transparent outline-none border-b border-transparent focus:border-foreground/20 transition-colors placeholder:font-normal placeholder:text-foreground/30"
+                    />
+                    {groups.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeGroup(gi)}
+                        className="text-xs text-foreground/40 hover:text-red-500 transition-colors shrink-0"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {parsed.variantNames.map((vName, vi) => (
+                      <div key={vi} className="flex items-center gap-3">
+                        <span className="text-sm text-foreground/60 w-32 shrink-0 truncate">{vName}</span>
+                        <input
+                          type="number"
+                          min="1"
+                          required
+                          placeholder="e.g. 10000"
+                          value={group.visitors[vi] || ''}
+                          onChange={e => updateGroupVisitor(gi, vi, Number(e.target.value))}
+                          className={inputClass}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {groups.length > 1 && (
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <p className="text-xs text-foreground/50">
+                        Applies to {group.metricIndices.length === 0 ? 'no metrics yet' : `${group.metricIndices.length} metric${group.metricIndices.length !== 1 ? 's' : ''}`}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {parsed.rows.map((row, mi) => {
+                          const isHere = group.metricIndices.includes(mi)
+                          return (
+                            <button
+                              key={mi}
+                              type="button"
+                              onClick={() => moveMetricToGroup(mi, gi)}
+                              className={`text-xs px-2 py-1 rounded-md border transition-colors ${
+                                isHere
+                                  ? 'border-brand bg-brand/10 text-foreground'
+                                  : 'border-foreground/15 text-foreground/50 hover:border-foreground/35 hover:text-foreground/70'
+                              }`}
+                            >
+                              {row.metric}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
+              {groups.length < parsed.rows.length && (
+                <button
+                  type="button"
+                  onClick={addGroup}
+                  className="text-sm text-brand hover:opacity-75 transition-opacity text-left"
+                >
+                  + Add visitor group
+                </button>
+              )}
             </div>
           </div>
 
