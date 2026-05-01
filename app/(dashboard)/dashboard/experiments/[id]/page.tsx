@@ -1,10 +1,12 @@
+import { Fragment } from 'react'
 import type { Metadata } from 'next'
 import { getExperiment } from '@/lib/actions/experiments'
-import { calculateResults } from '@/lib/stats'
+import { calculateResults, calculateCsvMetricResults } from '@/lib/stats'
 import { fmtPct, fmtNum } from '@/lib/format'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import EditForm from './EditForm'
+import CsvEditForm from './CsvEditForm'
 import DeleteButton from './DeleteButton'
 import StatusBadge from '@/components/ui/StatusBadge'
 
@@ -27,10 +29,116 @@ export default async function ExperimentPage({
   const experiment = await getExperiment(id)
   if (!experiment) notFound()
 
+  const confidencePct = (experiment.confidence_level * 100).toFixed(0)
+  const isCsv = experiment.metrics && experiment.metrics.length > 0
+
+  if (isCsv) {
+    const csvResults = calculateCsvMetricResults(experiment.variants, experiment.metrics!, experiment.confidence_level)
+    const significantCount = csvResults.filter(r => r.challengers.some(c => c.is_significant)).length
+    const challengers = experiment.variants.slice(1)
+
+    return (
+      <div className="max-w-3xl mx-auto px-6 py-8">
+        <div className="flex items-start justify-between gap-4 mb-8">
+          <div>
+            <Link href="/dashboard/experiments" className="text-sm text-foreground/50 hover:text-foreground transition-colors">
+              ← Back to experiments
+            </Link>
+            <h1 className="text-xl font-bold mt-2">{experiment.name}</h1>
+            <p className="text-sm text-foreground/40 mt-0.5">
+              Created {new Date(experiment.created_at).toLocaleDateString()}
+            </p>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <StatusBadge status={experiment.status} />
+            <DeleteButton id={experiment.id} />
+          </div>
+        </div>
+
+        <div className="border border-foreground/10 rounded-xl p-5 mb-8">
+          <h2 className="font-semibold mb-4">Results</h2>
+
+          <div className={`rounded-lg p-4 mb-5 ${significantCount > 0 ? 'bg-green-50 dark:bg-green-900/20' : 'bg-foreground/5'}`}>
+            <p className={`font-semibold ${significantCount > 0 ? 'text-green-700 dark:text-green-400' : 'text-foreground/60'}`}>
+              {significantCount > 0
+                ? `${significantCount} of ${csvResults.length} metrics significant`
+                : 'No significant metrics yet'}
+            </p>
+            <p className="text-sm text-foreground/50 mt-0.5">
+              {significantCount > 0
+                ? `At ${confidencePct}% confidence · ${experiment.variants[0].name}: ${experiment.variants[0].visitors.toLocaleString()} visitors`
+                : `More data needed to reach ${confidencePct}% confidence.`}
+            </p>
+          </div>
+
+          <div className="overflow-x-auto [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-foreground/5 [&::-webkit-scrollbar-thumb]:bg-foreground/20 [&::-webkit-scrollbar-thumb]:rounded-full">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-foreground/10">
+                  <th className="text-left py-2 pr-6 text-foreground/50 font-medium text-xs whitespace-nowrap">Metric</th>
+                  <th className="text-right py-2 px-3 text-foreground/50 font-medium text-xs whitespace-nowrap">
+                    {experiment.variants[0].name} (control)
+                  </th>
+                  {challengers.map(v => (
+                    <th key={v.name} colSpan={3} className="text-left py-2 px-3 text-foreground/50 font-medium text-xs whitespace-nowrap">
+                      {v.name}
+                    </th>
+                  ))}
+                </tr>
+                <tr className="border-b border-foreground/10">
+                  <th />
+                  <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">Rate</th>
+                  {challengers.map(v => (
+                    <Fragment key={v.name}>
+                      <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">Rate</th>
+                      <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">Uplift</th>
+                      <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">P-value</th>
+                    </Fragment>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {csvResults.map((r, i) => (
+                  <tr key={r.metricName} className={`border-b border-foreground/5 last:border-0 ${i % 2 === 0 ? '' : 'bg-foreground/[0.015]'}`}>
+                    <td className="py-2.5 pr-6 font-medium whitespace-nowrap">{r.metricName}</td>
+                    <td className="py-2.5 px-3 text-right">{fmtPct(r.control.rate)}</td>
+                    {r.challengers.map(c => (
+                      <Fragment key={c.name}>
+                        <td className="py-2.5 px-3 text-right">{fmtPct(c.conversion_rate)}</td>
+                        <td className={`py-2.5 px-3 text-right font-medium ${c.uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                          {Number.isFinite(c.uplift) ? `${c.uplift >= 0 ? '+' : ''}${c.uplift.toFixed(2)}%` : '—'}
+                        </td>
+                        <td className={`py-2.5 px-3 text-right ${c.is_significant ? (c.uplift >= 0 ? 'text-green-600 font-medium' : 'text-red-500 font-medium') : ''}`}>
+                          {fmtNum(c.p_value, 4)}
+                          {c.is_significant && <span className="ml-1.5 text-xs">✓</span>}
+                        </td>
+                      </Fragment>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {challengers.length > 1 && (
+            <p className="text-xs text-foreground/30 mt-2 text-right">scroll to see all variants →</p>
+          )}
+
+          <p className="text-xs text-foreground/40 mt-4">
+            Confidence level: {confidencePct}% · Visitors per variant: {experiment.variants.map(v => `${v.name} ${v.visitors.toLocaleString()}`).join(', ')}
+          </p>
+        </div>
+
+        <div className="border border-foreground/10 rounded-xl p-5">
+          <h2 className="font-semibold mb-5">Edit experiment</h2>
+          <CsvEditForm experiment={experiment} />
+        </div>
+      </div>
+    )
+  }
+
   const results = calculateResults(experiment.variants, experiment.confidence_level)
   const winners = results.challengers.filter(c => c.is_significant)
   const hasWinner = winners.length > 0
-  const confidencePct = (experiment.confidence_level * 100).toFixed(0)
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-8">
@@ -88,10 +196,10 @@ export default async function ExperimentPage({
                 <td className="py-2.5 pl-4 text-right text-foreground/40">—</td>
               </tr>
               {results.challengers.map((c, i) => (
-                <tr key={c.name} className={`border-b border-foreground/5 last:border-0 ${c.is_significant ? 'bg-green-50/50 dark:bg-green-900/10' : ''}`}>
+                <tr key={c.name} className={`border-b border-foreground/5 last:border-0 ${c.is_significant ? (c.uplift >= 0 ? 'bg-green-50/50 dark:bg-green-900/10' : 'bg-red-50/50 dark:bg-red-900/10') : ''}`}>
                   <td className="py-2.5 pr-4 font-medium flex items-center gap-2">
                     {c.name}
-                    {c.is_significant && <span className="text-xs text-green-600 dark:text-green-400 font-normal">winner</span>}
+                    {c.is_significant && <span className={`text-xs font-normal ${c.uplift >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>{c.uplift >= 0 ? 'winner' : 'loser'}</span>}
                   </td>
                   <td className="py-2.5 px-4 text-right">{experiment.variants[i + 1].visitors.toLocaleString()}</td>
                   <td className="py-2.5 px-4 text-right">{experiment.variants[i + 1].conversions.toLocaleString()}</td>

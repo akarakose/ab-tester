@@ -168,6 +168,95 @@ export async function updateExperiment(
   redirect(`/dashboard/experiments/${id}`)
 }
 
+export type CsvExperimentInput = {
+  experimentName: string
+  variantNames: string[]
+  visitors: number[]
+  metrics: { metric: string; values: number[] }[]
+  confidenceLevel: number
+}
+
+export async function createExperimentsFromCsv(
+  input: CsvExperimentInput
+): Promise<{ error?: string }> {
+  const { supabase, user } = await getAuthenticatedUser()
+
+  const { experimentName, variantNames, visitors, metrics, confidenceLevel } = input
+
+  if (!experimentName) return { error: 'Experiment name is required.' }
+  if (confidenceLevel < 50 || confidenceLevel >= 100) return { error: 'Confidence level must be between 50 and 99.9.' }
+  if (variantNames.length < 2) return { error: 'At least 2 variants are required.' }
+  if (visitors.some(v => v <= 0)) return { error: 'All visitor counts must be greater than 0.' }
+  if (metrics.length === 0) return { error: 'CSV has no data rows.' }
+
+  const variants: Variant[] = variantNames.map((name, i) => ({
+    name,
+    visitors: visitors[i],
+    conversions: 0,
+  }))
+
+  const csvMetrics = metrics.map(({ metric, values }) => ({
+    name: metric,
+    rates: values,
+  }))
+
+  const { error } = await supabase.from('experiments').insert({
+    user_id: user.id,
+    name: experimentName,
+    status: 'draft' as const,
+    variants,
+    metrics: csvMetrics,
+    confidence_level: confidenceLevel / 100,
+  })
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/dashboard/experiments')
+  return {}
+}
+
+export type CsvExperimentUpdateInput = {
+  name: string
+  status: string
+  variantNames: string[]
+  visitors: number[]
+  metrics: { name: string; rates: number[] }[]
+  confidenceLevel: number
+}
+
+export async function updateCsvExperiment(
+  id: string,
+  input: CsvExperimentUpdateInput
+): Promise<{ error?: string }> {
+  const { supabase } = await getAuthenticatedUser()
+
+  const { name, status, variantNames, visitors, metrics, confidenceLevel } = input
+
+  if (!name) return { error: 'Experiment name is required.' }
+  if (confidenceLevel < 50 || confidenceLevel >= 100) return { error: 'Confidence level must be between 50 and 99.9.' }
+  if (!['draft', 'running', 'concluded'].includes(status)) return { error: 'Invalid status.' }
+  if (variantNames.length < 2) return { error: 'At least 2 variants are required.' }
+  if (visitors.some(v => v <= 0)) return { error: 'All visitor counts must be greater than 0.' }
+  if (metrics.length === 0) return { error: 'At least one metric is required.' }
+
+  const variants: Variant[] = variantNames.map((vName, i) => ({
+    name: vName,
+    visitors: visitors[i],
+    conversions: 0,
+  }))
+
+  const { error } = await supabase
+    .from('experiments')
+    .update({ name, status, variants, metrics, confidence_level: confidenceLevel / 100 })
+    .eq('id', id)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/dashboard/experiments')
+  revalidatePath(`/dashboard/experiments/${id}`)
+  redirect(`/dashboard/experiments/${id}`)
+}
+
 export async function deleteExperiment(id: string): Promise<{ error: string } | void> {
   const { supabase } = await getAuthenticatedUser()
   const { error } = await supabase
