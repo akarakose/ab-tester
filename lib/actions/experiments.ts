@@ -1,5 +1,6 @@
 'use server'
 
+import * as Sentry from '@sentry/nextjs'
 import { cache } from 'react'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
@@ -17,6 +18,10 @@ import type {
 
 function sanitizeText(value: string): string {
   return value.replace(/<[^>]*>/g, '')
+}
+
+function isNextInternalError(error: unknown): boolean {
+  return ((error as { digest?: string })?.digest ?? '').startsWith('NEXT_')
 }
 
 const VALID_STATUSES = ['draft', 'running', 'concluded'] as const
@@ -168,29 +173,36 @@ export async function createExperiment(
   _prevState: ExperimentActionState,
   formData: FormData
 ): Promise<ExperimentActionState> {
-  const { supabase, user } = await getAuthenticatedUser()
+  try {
+    const { supabase, user } = await getAuthenticatedUser()
 
-  const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
-  const confidence = Number(formData.get('confidence_level'))
+    const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
+    const confidence = Number(formData.get('confidence_level'))
 
-  const baseError = validateCommonFields({ name, confidence })
-  if (baseError) return { error: baseError }
+    if (!name) return { fieldErrors: { name: 'Experiment name is required.' } }
+    if (name.length > MAX_NAME_LENGTH) return { fieldErrors: { name: `Experiment name must be ${MAX_NAME_LENGTH} characters or fewer.` } }
+    if (!Number.isFinite(confidence) || confidence < 50 || confidence >= 100) return { fieldErrors: { confidence_level: 'Confidence level must be between 50 and 99.9.' } }
 
-  const parsed = parseVariants(formData)
-  if ('error' in parsed) return { error: parsed.error }
+    const parsed = parseVariants(formData)
+    if ('error' in parsed) return { fieldErrors: { variants: parsed.error } }
 
-  const { error } = await supabase.from('experiments').insert({
-    user_id: user.id,
-    name,
-    status: 'draft',
-    variants: parsed.variants,
-    confidence_level: confidence / 100,
-  })
+    const { error } = await supabase.from('experiments').insert({
+      user_id: user.id,
+      name,
+      status: 'draft',
+      variants: parsed.variants,
+      confidence_level: confidence / 100,
+    })
 
-  if (error) return { error: error.message }
+    if (error) return { error: error.message }
 
-  revalidateExperimentPaths()
-  redirect('/dashboard/experiments')
+    revalidateExperimentPaths()
+    redirect('/dashboard/experiments')
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
 }
 
 export async function updateExperiment(
@@ -198,112 +210,138 @@ export async function updateExperiment(
   _prevState: ExperimentActionState,
   formData: FormData
 ): Promise<ExperimentActionState> {
-  const { supabase } = await getAuthenticatedUser()
+  try {
+    const { supabase } = await getAuthenticatedUser()
 
-  const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
-  const confidence = Number(formData.get('confidence_level'))
-  const status = formData.get('status') as string
+    const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
+    const confidence = Number(formData.get('confidence_level'))
+    const status = formData.get('status') as string
 
-  const baseError = validateCommonFields({ name, confidence, status })
-  if (baseError) return { error: baseError }
+    if (!name) return { fieldErrors: { name: 'Experiment name is required.' } }
+    if (name.length > MAX_NAME_LENGTH) return { fieldErrors: { name: `Experiment name must be ${MAX_NAME_LENGTH} characters or fewer.` } }
+    if (!Number.isFinite(confidence) || confidence < 50 || confidence >= 100) return { fieldErrors: { confidence_level: 'Confidence level must be between 50 and 99.9.' } }
+    if (!VALID_STATUSES.includes(status as typeof VALID_STATUSES[number])) return { error: 'Invalid status.' }
 
-  const parsed = parseVariants(formData)
-  if ('error' in parsed) return { error: parsed.error }
+    const parsed = parseVariants(formData)
+    if ('error' in parsed) return { fieldErrors: { variants: parsed.error } }
 
-  const { error } = await supabase
-    .from('experiments')
-    .update({
-      name,
-      status,
-      variants: parsed.variants,
-      confidence_level: confidence / 100,
-    })
-    .eq('id', id)
+    const { error } = await supabase
+      .from('experiments')
+      .update({
+        name,
+        status,
+        variants: parsed.variants,
+        confidence_level: confidence / 100,
+      })
+      .eq('id', id)
 
-  if (error) return { error: error.message }
+    if (error) return { error: error.message }
 
-  revalidateExperimentPaths(id)
-  redirect(`/dashboard/experiments/${id}`)
+    revalidateExperimentPaths(id)
+    redirect(`/dashboard/experiments/${id}`)
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
 }
 
 export async function createExperimentsFromCsv(
   input: CsvExperimentInput
 ): Promise<{ error?: string }> {
-  const { supabase, user } = await getAuthenticatedUser()
-  const experimentName = sanitizeText(input.experimentName)
-  const variantNames = input.variantNames.map(sanitizeText)
-  const metrics = input.metrics.map(m => ({
-    name: sanitizeText(m.name),
-    rates: m.rates,
-    visitors: m.visitors,
-    ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
-  }))
-  const { confidenceLevel } = input
+  try {
+    const { supabase, user } = await getAuthenticatedUser()
+    const experimentName = sanitizeText(input.experimentName)
+    const variantNames = input.variantNames.map(sanitizeText)
+    const metrics = input.metrics.map(m => ({
+      name: sanitizeText(m.name),
+      rates: m.rates,
+      visitors: m.visitors,
+      ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
+    }))
+    const { confidenceLevel } = input
 
-  const baseError = validateCommonFields({ name: experimentName, confidence: confidenceLevel })
-  if (baseError) return { error: baseError }
+    const baseError = validateCommonFields({ name: experimentName, confidence: confidenceLevel })
+    if (baseError) return { error: baseError }
 
-  const csvError = validateCsvBase({ variantNames, metrics })
-  if (csvError) return { error: csvError }
+    const csvError = validateCsvBase({ variantNames, metrics })
+    if (csvError) return { error: csvError }
 
-  const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
+    const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
 
-  const { error } = await supabase.from('experiments').insert({
-    user_id: user.id,
-    name: experimentName,
-    status: 'draft' as const,
-    variants,
-    metrics: csvMetrics,
-    confidence_level: confidenceLevel / 100,
-  })
+    const { error } = await supabase.from('experiments').insert({
+      user_id: user.id,
+      name: experimentName,
+      status: 'draft' as const,
+      variants,
+      metrics: csvMetrics,
+      confidence_level: confidenceLevel / 100,
+    })
 
-  if (error) return { error: error.message }
+    if (error) return { error: error.message }
 
-  revalidateExperimentPaths()
-  return {}
+    revalidateExperimentPaths()
+    return {}
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
 }
 
 export async function updateCsvExperiment(
   id: string,
   input: CsvExperimentUpdateInput
 ): Promise<{ error?: string }> {
-  const { supabase } = await getAuthenticatedUser()
-  const name = sanitizeText(input.name)
-  const variantNames = input.variantNames.map(sanitizeText)
-  const metrics = input.metrics.map(m => ({
-    name: sanitizeText(m.name),
-    rates: m.rates,
-    visitors: m.visitors,
-    ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
-  }))
-  const { status, confidenceLevel } = input
+  try {
+    const { supabase } = await getAuthenticatedUser()
+    const name = sanitizeText(input.name)
+    const variantNames = input.variantNames.map(sanitizeText)
+    const metrics = input.metrics.map(m => ({
+      name: sanitizeText(m.name),
+      rates: m.rates,
+      visitors: m.visitors,
+      ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
+    }))
+    const { status, confidenceLevel } = input
 
-  const baseError = validateCommonFields({ name, confidence: confidenceLevel, status })
-  if (baseError) return { error: baseError }
+    const baseError = validateCommonFields({ name, confidence: confidenceLevel, status })
+    if (baseError) return { error: baseError }
 
-  const csvError = validateCsvBase({ variantNames, metrics })
-  if (csvError) return { error: csvError }
+    const csvError = validateCsvBase({ variantNames, metrics })
+    if (csvError) return { error: csvError }
 
-  const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
+    const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
 
-  const { error } = await supabase
-    .from('experiments')
-    .update({ name, status, variants, metrics: csvMetrics, confidence_level: confidenceLevel / 100 })
-    .eq('id', id)
+    const { error } = await supabase
+      .from('experiments')
+      .update({ name, status, variants, metrics: csvMetrics, confidence_level: confidenceLevel / 100 })
+      .eq('id', id)
 
-  if (error) return { error: error.message }
+    if (error) return { error: error.message }
 
-  revalidateExperimentPaths(id)
-  redirect(`/dashboard/experiments/${id}`)
+    revalidateExperimentPaths(id)
+    redirect(`/dashboard/experiments/${id}`)
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
 }
 
 export async function deleteExperiment(id: string): Promise<{ error: string } | void> {
-  const { supabase } = await getAuthenticatedUser()
-  const { error } = await supabase
-    .from('experiments')
-    .update({ deleted_at: new Date().toISOString() })
-    .eq('id', id)
-  if (error) return { error: error.message }
-  revalidateExperimentPaths()
-  redirect('/dashboard/experiments')
+  try {
+    const { supabase } = await getAuthenticatedUser()
+    const { error } = await supabase
+      .from('experiments')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) return { error: error.message }
+    revalidateExperimentPaths()
+    redirect('/dashboard/experiments')
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
 }

@@ -42,6 +42,7 @@ function initState(experiment: Experiment) {
 export default function CsvEditForm({ experiment }: { experiment: Experiment }) {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; confidence_level?: string; variants?: string; visitors?: string }>({})
   const [variantNames, setVariantNames] = useState(experiment.variants.map(v => v.name))
   const initial = useState(() => initState(experiment))[0]
   const [groups, setGroups] = useState<VisitorGroup[]>(initial.groups)
@@ -96,21 +97,22 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
     const status = (form.elements.namedItem('status') as HTMLSelectElement).value
     const confidence = Number((form.elements.namedItem('confidence_level') as HTMLInputElement).value)
 
-    if (!name) { setError('Experiment name is required.'); return }
-    if (confidence < 50 || confidence >= 100) { setError('Confidence level must be between 50 and 99.9.'); return }
-    if (variantNames.some(n => !n.trim())) { setError('All variant names are required.'); return }
-    if (metrics.length === 0) { setError('At least one metric is required.'); return }
-    if (metrics.some(m => !m.name.trim())) { setError('All metrics must have a name.'); return }
-    if (metrics.some(m => m.rates.some(r => isNaN(r) || r < 0 || r > 100))) {
-      setError('All metric values must be percentages between 0 and 100.')
-      return
-    }
+    const fe: { name?: string; confidence_level?: string; variants?: string; visitors?: string } = {}
+    if (!name) fe.name = 'Experiment name is required.'
+    if (confidence < 50 || confidence >= 100) fe.confidence_level = 'Confidence level must be between 50 and 99.9.'
+    if (variantNames.some(n => !n.trim())) fe.variants = 'All variant names are required.'
+    if (metrics.length === 0) fe.variants = 'At least one metric is required.'
+    if (metrics.some(m => !m.name.trim())) fe.variants = 'All metrics must have a name.'
+    if (metrics.some(m => m.rates.some(r => isNaN(r) || r < 0 || r > 100)))
+      fe.variants = 'All metric values must be percentages between 0 and 100.'
 
     const activeGroupIds = new Set(metrics.map(m => m.groupId))
     const activeGroups = groups.filter(g => activeGroupIds.has(g.id))
-    if (activeGroups.some(g => g.visitors.some(v => !v || v <= 0))) {
-      setError('All visitor counts must be greater than 0.'); return
-    }
+    if (activeGroups.some(g => g.visitors.some(v => !v || v <= 0)))
+      fe.visitors = 'All visitor counts must be greater than 0.'
+
+    if (Object.keys(fe).length > 0) { setFieldErrors(fe); return }
+    setFieldErrors({})
 
     const metricsPayload = metrics.map(m => {
       const group = groups.find(g => g.id === m.groupId)!
@@ -137,6 +139,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
       <div className="flex flex-col gap-1">
         <label htmlFor="name" className={labelClass}>Experiment name</label>
         <input id="name" name="name" type="text" required defaultValue={experiment.name} className={inputClass} />
+        {fieldErrors.name && <p className="text-xs text-red-500 mt-0.5">{fieldErrors.name}</p>}
       </div>
 
       <div className="flex flex-col gap-1">
@@ -246,6 +249,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
               + Add visitor group
             </button>
           )}
+          {fieldErrors.visitors && <p className="text-sm text-red-500">{fieldErrors.visitors}</p>}
         </div>
       </div>
 
@@ -307,6 +311,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
         >
           + Add metric
         </button>
+        {fieldErrors.variants && <p className="text-sm text-red-500">{fieldErrors.variants}</p>}
       </div>
 
       <div className="flex flex-col gap-1">
@@ -318,6 +323,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
           className={inputClass}
         />
         <p className="text-xs text-foreground/40 mt-0.5">How certain you want to be before calling a winner.</p>
+        {fieldErrors.confidence_level && <p className="text-xs text-red-500 mt-0.5">{fieldErrors.confidence_level}</p>}
       </div>
 
       {error && <p className="text-sm text-red-500">{error}</p>}
