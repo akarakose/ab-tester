@@ -16,24 +16,28 @@ function arraysEqual(a: number[], b: number[]) {
 }
 
 function initState(experiment: Experiment) {
-  const variantVisitors = experiment.variants.map(v => v.visitors)
+  const props = experiment.properties
+  const numVariants = props.variant_names.length
+  const numMetrics = props.metric_names.length
   const groups: VisitorGroup[] = []
   const metrics: MetricRow[] = []
   let nextId = 1
 
-  for (const m of experiment.metrics!) {
-    const visitors = m.visitors && m.visitors.length === variantVisitors.length ? m.visitors : variantVisitors
-    const existing = groups.find(g => arraysEqual(g.visitors, visitors))
+  for (let m = 0; m < numMetrics; m++) {
+    const visitors = Array.from({ length: numVariants }, (_, i) => props.N[i]?.[m] ?? 0)
+    const rates = Array.from({ length: numVariants }, (_, i) => (props.metric_values[i]?.[m] ?? 0) * 100)
+    const label = props.visitor_group_labels[m] ?? ''
+    const existing = groups.find(g => arraysEqual(g.visitors, visitors) && g.label === label)
     const groupId = existing ? existing.id : (() => {
       const id = nextId++
-      groups.push({ id, visitors: [...visitors], label: m.visitorGroupLabel ?? '' })
+      groups.push({ id, visitors: [...visitors], label })
       return id
     })()
-    metrics.push({ name: m.name, rates: [...m.rates], groupId })
+    metrics.push({ name: props.metric_names[m], rates, groupId })
   }
 
   if (groups.length === 0) {
-    groups.push({ id: nextId++, visitors: variantVisitors, label: '' })
+    groups.push({ id: nextId++, visitors: new Array(numVariants).fill(0), label: '' })
   }
 
   return { groups, metrics, nextId }
@@ -43,7 +47,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; confidence_level?: string; variants?: string; visitors?: string }>({})
-  const [variantNames, setVariantNames] = useState(experiment.variants.map(v => v.name))
+  const [variantNames, setVariantNames] = useState(experiment.properties.variant_names)
   const initial = useState(() => initState(experiment))[0]
   const [groups, setGroups] = useState<VisitorGroup[]>(initial.groups)
   const [metrics, setMetrics] = useState<MetricRow[]>(initial.metrics)
