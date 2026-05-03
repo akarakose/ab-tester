@@ -54,6 +54,8 @@ export default function NewExperimentCsvPage() {
   const [parsed, setParsed] = useState<ParsedCsv | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; confidence_level?: string; visitors?: string }>({})
+
   const [groups, setGroups] = useState<VisitorGroup[]>([])
   const [isPending, startTransition] = useTransition()
 
@@ -132,22 +134,21 @@ export default function NewExperimentCsvPage() {
     const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim()
     const confidence = Number((form.elements.namedItem('confidence_level') as HTMLInputElement).value)
 
-    if (!name) { setSubmitError('Experiment name is required.'); return }
-    if (confidence < 50 || confidence >= 100) { setSubmitError('Confidence level must be between 50 and 99.9.'); return }
+    const errors: { name?: string; confidence_level?: string; visitors?: string } = {}
+    if (!name) errors.name = 'Experiment name is required.'
+    if (confidence < 50 || confidence >= 100) errors.confidence_level = 'Confidence level must be between 50 and 99.9.'
 
     const activeGroups = groups.filter(g => g.metricIndices.length > 0)
-    if (activeGroups.some(g => g.visitors.some(v => !v || v <= 0))) {
-      setSubmitError('All visitor counts must be greater than 0.'); return
-    }
+    if (activeGroups.some(g => g.visitors.some(v => !v || v <= 0))) errors.visitors = 'All visitor counts must be greater than 0.'
 
     const metricsWithVisitors = parsed.rows.map((row, mi) => {
       const group = activeGroups.find(g => g.metricIndices.includes(mi))
       return group ? { name: row.metric, rates: row.values, visitors: group.visitors, visitorGroupLabel: group.label || undefined } : null
     })
-    if (metricsWithVisitors.some(m => m === null)) {
-      setSubmitError('Every metric must be assigned to a visitor group.'); return
-    }
+    if (metricsWithVisitors.some(m => m === null)) errors.visitors = 'Every metric must be assigned to a visitor group.'
 
+    if (Object.keys(errors).length > 0) { setFieldErrors(errors); return }
+    setFieldErrors({})
     setSubmitError(null)
     startTransition(async () => {
       const result = await createExperimentsFromCsv({
@@ -258,6 +259,9 @@ export default function NewExperimentCsvPage() {
               placeholder="e.g. Homepage redesign"
               className={inputClass}
             />
+            {fieldErrors.name && (
+              <p className="text-xs text-red-500 mt-0.5">{fieldErrors.name}</p>
+            )}
           </div>
 
           {/* Visitor groups */}
@@ -345,6 +349,10 @@ export default function NewExperimentCsvPage() {
             </div>
           </div>
 
+          {fieldErrors.visitors && (
+            <p className="text-sm text-red-500">{fieldErrors.visitors}</p>
+          )}
+
           {/* Confidence level */}
           <div className="flex flex-col gap-1">
             <label htmlFor="confidence_level" className={labelClass}>Confidence level (%)</label>
@@ -362,6 +370,9 @@ export default function NewExperimentCsvPage() {
             <p className="text-xs text-foreground/40 mt-0.5">
               How certain you want to be before calling a winner. 95 is the industry standard.
             </p>
+            {fieldErrors.confidence_level && (
+              <p className="text-xs text-red-500 mt-0.5">{fieldErrors.confidence_level}</p>
+            )}
           </div>
 
           {submitError && <p className="text-sm text-red-500">{submitError}</p>}

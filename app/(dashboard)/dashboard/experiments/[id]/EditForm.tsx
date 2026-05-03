@@ -42,6 +42,9 @@ export default function EditForm({ experiment }: { experiment: Experiment }) {
           defaultValue={experiment.name}
           className={inputClass}
         />
+        {state?.fieldErrors?.name && (
+          <p className="text-xs text-red-500 mt-0.5">{state.fieldErrors.name}</p>
+        )}
       </div>
 
       <div className="flex flex-col gap-1">
@@ -120,6 +123,10 @@ export default function EditForm({ experiment }: { experiment: Experiment }) {
         </button>
       )}
 
+      {state?.fieldErrors?.variants && (
+        <p className="text-sm text-red-500">{state.fieldErrors.variants}</p>
+      )}
+
       <div className="flex flex-col gap-1">
         <label htmlFor="confidence_level" className={labelClass}>Confidence level (%)</label>
         <input
@@ -133,6 +140,9 @@ export default function EditForm({ experiment }: { experiment: Experiment }) {
           defaultValue={experiment.confidence_level * 100}
           className={inputClass}
         />
+        {state?.fieldErrors?.confidence_level && (
+          <p className="text-xs text-red-500 mt-0.5">{state.fieldErrors.confidence_level}</p>
+        )}
       </div>
 
       {state?.error && (

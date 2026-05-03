@@ -1,4 +1,13 @@
-export type ExperimentActionState = { error?: string } | undefined
+export type ExperimentFieldErrors = {
+  name?: string
+  confidence_level?: string
+  variants?: string
+}
+
+export type ExperimentActionState = {
+  error?: string
+  fieldErrors?: ExperimentFieldErrors
+} | undefined
 
 export type SortField = 'name' | 'created_at' | 'updated_at' | 'status'
 export type SortOrder = 'asc' | 'desc'

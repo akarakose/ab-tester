@@ -55,6 +55,9 @@ export default function NewExperimentPage() {
             placeholder="e.g. Homepage CTA button colour"
             className={inputClass}
           />
+          {state?.fieldErrors?.name && (
+            <p className="text-xs text-red-500 mt-0.5">{state.fieldErrors.name}</p>
+          )}
         </div>
 
         <div className="flex flex-col gap-3">
@@ -117,6 +120,10 @@ export default function NewExperimentPage() {
           </button>
         )}
 
+        {state?.fieldErrors?.variants && (
+          <p className="text-sm text-red-500">{state.fieldErrors.variants}</p>
+        )}
+
         <div className="flex flex-col gap-1">
           <label htmlFor="confidence_level" className={labelClass}>Confidence level (%)</label>
           <input
@@ -133,6 +140,9 @@ export default function NewExperimentPage() {
           <p className="text-xs text-foreground/40 mt-0.5">
             How certain you want to be before calling a winner. 95 is the industry standard.
           </p>
+          {state?.fieldErrors?.confidence_level && (
+            <p className="text-xs text-red-500 mt-0.5">{state.fieldErrors.confidence_level}</p>
+          )}
         </div>
 
         {state?.error && (
