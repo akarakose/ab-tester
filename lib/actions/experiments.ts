@@ -5,7 +5,7 @@ import { cache } from 'react'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import type { Experiment, Variant } from '@/types/experiment'
+import type { Experiment, ExperimentType, Properties } from '@/types/experiment'
 import type {
   CsvExperimentInput,
   CsvExperimentUpdateInput,
@@ -52,32 +52,102 @@ function validateCommonFields({ name, confidence, status }: { name: string; conf
   return null
 }
 
-function parseVariants(formData: FormData): { variants: Variant[] } | { error: string } {
-  const count = Number(formData.get('variant_count'))
-  if (!Number.isInteger(count) || count < MIN_VARIANTS) return { error: 'At least 2 variants (control + one challenger) are required.' }
-  if (count > MAX_VARIANTS) return { error: `Maximum ${MAX_VARIANTS} variants allowed.` }
+type ParseError = { error: string; field?: 'metric_name' | 'variants' }
 
-  const variants: Variant[] = []
+function parseBinomialSingle(formData: FormData): { properties: Properties } | ParseError {
+  const count = Number(formData.get('variant_count'))
+  if (!Number.isInteger(count) || count < MIN_VARIANTS) return { error: 'At least 2 variants (control + one challenger) are required.', field: 'variants' }
+  if (count > MAX_VARIANTS) return { error: `Maximum ${MAX_VARIANTS} variants allowed.`, field: 'variants' }
+
+  const variantNames: string[] = []
+  const N: number[][] = []
+  const metricValues: number[][] = []
+
   for (let i = 0; i < count; i++) {
     const name = sanitizeText((formData.get(`variant_name_${i}`) as string)?.trim() ?? '')
     const visitors = Number(formData.get(`variant_visitors_${i}`))
     const conversions = Number(formData.get(`variant_conversions_${i}`))
 
-    if (!name) return { error: `Variant ${i + 1} must have a name.` }
-    if (!Number.isFinite(visitors) || !Number.isInteger(visitors) || visitors <= 0) return { error: `"${name}" visitors must be a whole number greater than 0.` }
-    if (!Number.isFinite(conversions) || !Number.isInteger(conversions) || conversions < 0) return { error: `"${name}" conversions must be a whole number that is not negative.` }
-    if (conversions > visitors) return { error: `"${name}" conversions cannot exceed visitors.` }
+    if (!name) return { error: `Variant ${i + 1} must have a name.`, field: 'variants' }
+    if (!Number.isFinite(visitors) || !Number.isInteger(visitors) || visitors <= 0) return { error: `"${name}" visitors must be a whole number greater than 0.`, field: 'variants' }
+    if (!Number.isFinite(conversions) || !Number.isInteger(conversions) || conversions < 0) return { error: `"${name}" conversions must be a whole number that is not negative.`, field: 'variants' }
+    if (conversions > visitors) return { error: `"${name}" conversions cannot exceed visitors.`, field: 'variants' }
 
-    variants.push({ name, visitors, conversions })
+    variantNames.push(name)
+    N.push([visitors])
+    metricValues.push([conversions / visitors])
   }
 
-  const names = variants.map(v => v.name)
-  if (new Set(names).size !== names.length) return { error: 'Variant names must be unique.' }
+  if (new Set(variantNames).size !== variantNames.length) return { error: 'Variant names must be unique.', field: 'variants' }
 
-  return { variants }
+  return {
+    properties: {
+      experiment_type: 'binomial_single',
+      variant_names: variantNames,
+      metric_names: ['Conversion'],
+      metric_values: metricValues,
+      N,
+      std_dev: null,
+      visitor_group_labels: [''],
+    },
+  }
 }
 
-function validateCsvBase(input: { variantNames: string[]; metrics: CsvMetricInput[] }): string | null {
+function parseContinuousSingle(formData: FormData): { properties: Properties } | ParseError {
+  const count = Number(formData.get('variant_count'))
+  if (!Number.isInteger(count) || count < MIN_VARIANTS) return { error: 'At least 2 variants (control + one challenger) are required.', field: 'variants' }
+  if (count > MAX_VARIANTS) return { error: `Maximum ${MAX_VARIANTS} variants allowed.`, field: 'variants' }
+
+  const metricName = sanitizeText((formData.get('metric_name') as string)?.trim() ?? '')
+  if (!metricName) return { error: 'Metric name is required.', field: 'metric_name' }
+  if (metricName.length > MAX_NAME_LENGTH) return { error: `Metric name must be ${MAX_NAME_LENGTH} characters or fewer.`, field: 'metric_name' }
+
+  const variantNames: string[] = []
+  const metricValues: number[][] = []
+  const N: number[][] = []
+  const stdDev: (number | null)[][] = []
+  let anyStdDev = false
+
+  for (let i = 0; i < count; i++) {
+    const name = sanitizeText((formData.get(`variant_name_${i}`) as string)?.trim() ?? '')
+    const mean = Number(formData.get(`variant_mean_${i}`))
+    const sampleSize = Number(formData.get(`variant_sample_size_${i}`))
+    const stdRaw = (formData.get(`variant_std_dev_${i}`) as string | null)?.trim() ?? ''
+
+    if (!name) return { error: `Variant ${i + 1} must have a name.`, field: 'variants' }
+    if (!Number.isFinite(mean) || mean <= 0) return { error: `"${name}" mean must be a positive number.`, field: 'variants' }
+    if (!Number.isFinite(sampleSize) || !Number.isInteger(sampleSize) || sampleSize < 2) return { error: `"${name}" sample size must be a whole number of at least 2.`, field: 'variants' }
+
+    let sd: number | null = null
+    if (stdRaw !== '') {
+      const parsed = Number(stdRaw)
+      if (!Number.isFinite(parsed) || parsed <= 0) return { error: `"${name}" std dev must be greater than 0.`, field: 'variants' }
+      sd = parsed
+      anyStdDev = true
+    }
+
+    variantNames.push(name)
+    metricValues.push([mean])
+    N.push([sampleSize])
+    stdDev.push([sd])
+  }
+
+  if (new Set(variantNames).size !== variantNames.length) return { error: 'Variant names must be unique.', field: 'variants' }
+
+  return {
+    properties: {
+      experiment_type: 'continuous_single',
+      variant_names: variantNames,
+      metric_names: [metricName],
+      metric_values: metricValues,
+      N,
+      std_dev: anyStdDev ? stdDev : null,
+      visitor_group_labels: [''],
+    },
+  }
+}
+
+function validateMultipleMeasures(input: { variantNames: string[]; metrics: CsvMetricInput[] }): string | null {
   if (!Array.isArray(input.variantNames) || !Array.isArray(input.metrics)) return 'Invalid input shape.'
   if (input.variantNames.length < MIN_VARIANTS) return 'At least 2 variants are required.'
   if (input.variantNames.length > MAX_VARIANTS) return `Maximum ${MAX_VARIANTS} variants allowed.`
@@ -104,20 +174,30 @@ function validateCsvBase(input: { variantNames: string[]; metrics: CsvMetricInpu
   return null
 }
 
-function buildCsvPayload(variantNames: string[], metrics: CsvMetricInput[]): { variants: Variant[]; metrics: CsvMetricInput[] } {
-  const defaultVisitors = metrics[0].visitors
-  const variants: Variant[] = variantNames.map((name, i) => ({
-    name,
-    visitors: defaultVisitors[i],
-    conversions: 0,
-  }))
-  const cleanedMetrics = metrics.map(({ name, rates, visitors, visitorGroupLabel }) => ({
-    name,
-    rates,
-    visitors,
-    ...(visitorGroupLabel ? { visitorGroupLabel } : {}),
-  }))
-  return { variants, metrics: cleanedMetrics }
+function buildMultipleMeasuresProperties(variantNames: string[], metrics: CsvMetricInput[]): Properties {
+  const numVariants = variantNames.length
+  const numMetrics = metrics.length
+
+  const metric_values: number[][] = Array.from({ length: numVariants }, () => Array(numMetrics).fill(0))
+  const N: number[][] = Array.from({ length: numVariants }, () => Array(numMetrics).fill(0))
+
+  for (let m = 0; m < numMetrics; m++) {
+    const metric = metrics[m]
+    for (let v = 0; v < numVariants; v++) {
+      metric_values[v][m] = metric.rates[v] / 100  // rates are entered as 0..100 in CSV form
+      N[v][m] = metric.visitors[v]
+    }
+  }
+
+  return {
+    experiment_type: 'multiple_measures',
+    variant_names: variantNames,
+    metric_names: metrics.map(m => m.name),
+    metric_values,
+    N,
+    std_dev: null,
+    visitor_group_labels: metrics.map(m => m.visitorGroupLabel ?? ''),
+  }
 }
 
 export async function getExperiments(
@@ -178,26 +258,33 @@ export async function createExperiment(
 
     const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
     const confidence = Number(formData.get('confidence_level'))
+    const requestedType: ExperimentType = (formData.get('metric_type') as string) === 'continuous'
+      ? 'continuous_single'
+      : 'binomial_single'
 
     if (!name) return { fieldErrors: { name: 'Experiment name is required.' } }
     if (name.length > MAX_NAME_LENGTH) return { fieldErrors: { name: `Experiment name must be ${MAX_NAME_LENGTH} characters or fewer.` } }
     if (!Number.isFinite(confidence) || confidence < 50 || confidence >= 100) return { fieldErrors: { confidence_level: 'Confidence level must be between 50 and 99.9.' } }
 
-    const parsed = parseVariants(formData)
-    if ('error' in parsed) return { fieldErrors: { variants: parsed.error } }
+    const parsed = requestedType === 'continuous_single' ? parseContinuousSingle(formData) : parseBinomialSingle(formData)
+    if ('error' in parsed) return { fieldErrors: { [parsed.field ?? 'variants']: parsed.error } }
 
-    const { error } = await supabase.from('experiments').insert({
-      user_id: user.id,
-      name,
-      status: 'draft',
-      variants: parsed.variants,
-      confidence_level: confidence / 100,
-    })
+    const { data: inserted, error } = await supabase
+      .from('experiments')
+      .insert({
+        user_id: user.id,
+        name,
+        status: 'draft',
+        confidence_level: confidence / 100,
+        properties: parsed.properties,
+      })
+      .select('id')
+      .single()
 
     if (error) return { error: error.message }
 
-    revalidateExperimentPaths()
-    redirect('/dashboard/experiments')
+    revalidateExperimentPaths(inserted.id)
+    redirect(`/dashboard/experiments/${inserted.id}`)
   } catch (error) {
     if (isNextInternalError(error)) throw error
     Sentry.captureException(error)
@@ -222,16 +309,30 @@ export async function updateExperiment(
     if (!Number.isFinite(confidence) || confidence < 50 || confidence >= 100) return { fieldErrors: { confidence_level: 'Confidence level must be between 50 and 99.9.' } }
     if (!VALID_STATUSES.includes(status as typeof VALID_STATUSES[number])) return { error: 'Invalid status.' }
 
-    const parsed = parseVariants(formData)
-    if ('error' in parsed) return { fieldErrors: { variants: parsed.error } }
+    const { data: existing, error: fetchError } = await supabase
+      .from('experiments')
+      .select('properties')
+      .eq('id', id)
+      .is('deleted_at', null)
+      .single()
+    if (fetchError || !existing) return { error: 'Experiment not found.' }
+
+    const existingType = (existing.properties as Properties)?.experiment_type
+    const parsed =
+      existingType === 'continuous_single' ? parseContinuousSingle(formData)
+      : existingType === 'binomial_single' ? parseBinomialSingle(formData)
+      : null
+
+    if (!parsed) return { error: 'This experiment type cannot be edited from this form.' }
+    if ('error' in parsed) return { fieldErrors: { [parsed.field ?? 'variants']: parsed.error } }
 
     const { error } = await supabase
       .from('experiments')
       .update({
         name,
         status,
-        variants: parsed.variants,
         confidence_level: confidence / 100,
+        properties: parsed.properties,
       })
       .eq('id', id)
 
@@ -264,18 +365,17 @@ export async function createExperimentsFromCsv(
     const baseError = validateCommonFields({ name: experimentName, confidence: confidenceLevel })
     if (baseError) return { error: baseError }
 
-    const csvError = validateCsvBase({ variantNames, metrics })
+    const csvError = validateMultipleMeasures({ variantNames, metrics })
     if (csvError) return { error: csvError }
 
-    const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
+    const properties = buildMultipleMeasuresProperties(variantNames, metrics)
 
     const { error } = await supabase.from('experiments').insert({
       user_id: user.id,
       name: experimentName,
       status: 'draft' as const,
-      variants,
-      metrics: csvMetrics,
       confidence_level: confidenceLevel / 100,
+      properties,
     })
 
     if (error) return { error: error.message }
@@ -308,14 +408,14 @@ export async function updateCsvExperiment(
     const baseError = validateCommonFields({ name, confidence: confidenceLevel, status })
     if (baseError) return { error: baseError }
 
-    const csvError = validateCsvBase({ variantNames, metrics })
+    const csvError = validateMultipleMeasures({ variantNames, metrics })
     if (csvError) return { error: csvError }
 
-    const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
+    const properties = buildMultipleMeasuresProperties(variantNames, metrics)
 
     const { error } = await supabase
       .from('experiments')
-      .update({ name, status, variants, metrics: csvMetrics, confidence_level: confidenceLevel / 100 })
+      .update({ name, status, confidence_level: confidenceLevel / 100, properties })
       .eq('id', id)
 
     if (error) return { error: error.message }

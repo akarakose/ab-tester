@@ -1,22 +1,14 @@
 export type ExperimentStatus = 'draft' | 'running' | 'concluded'
+export type ExperimentType = 'binomial_single' | 'continuous_single' | 'multiple_measures'
 
-export type Variant = {
-  name: string
-  visitors: number
-  conversions: number
-}
-
-export type CsvMetric = {
-  name: string
-  rates: number[]
-  visitors?: number[]
-  visitorGroupLabel?: string
-}
-
-export type CsvMetricResult = {
-  metricName: string
-  control: { name: string; rate: number }
-  challengers: VariantResult[]
+export type Properties = {
+  experiment_type: ExperimentType
+  variant_names: string[]
+  metric_names: string[]
+  metric_values: number[][]
+  N: number[][]
+  std_dev: (number | null)[][] | null
+  visitor_group_labels: string[]
 }
 
 export type Experiment = {
@@ -24,13 +16,12 @@ export type Experiment = {
   user_id: string
   name: string
   status: ExperimentStatus
-  variants: Variant[]
   confidence_level: number
-  metrics: CsvMetric[] | null
   ai_summary: string | null
   created_at: string
   updated_at: string
   deleted_at: string | null
+  properties: Properties
 }
 
 export type VariantResult = {
@@ -47,8 +38,27 @@ export type ExperimentResult = {
   challengers: VariantResult[]
 }
 
-export type CreateExperimentInput = {
+export type MetricResult = {
+  metricName: string
+  visitorGroupLabel: string
+  control: { name: string; rate: number }
+  challengers: VariantResult[]
+}
+
+export type ContinuousVariantResult = {
   name: string
-  variants: Variant[]
-  confidence_level: number
+  mean: number
+  sample_size: number
+  ci_lo: number
+  ci_hi: number
+  p_value: number
+  is_significant: boolean
+  uplift: number
+  cohens_d: number
+  std_dev_estimated: boolean
+}
+
+export type ContinuousExperimentResult = {
+  control: { name: string; mean: number; sample_size: number; std_dev_estimated: boolean }
+  challengers: ContinuousVariantResult[]
 }

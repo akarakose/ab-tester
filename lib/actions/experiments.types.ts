@@ -2,6 +2,7 @@ export type ExperimentFieldErrors = {
   name?: string
   confidence_level?: string
   variants?: string
+  metric_name?: string
 }
 
 export type ExperimentActionState = {

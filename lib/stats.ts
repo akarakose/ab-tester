@@ -1,4 +1,4 @@
-import type { Variant, VariantResult, ExperimentResult, CsvMetric, CsvMetricResult } from '@/types/experiment'
+import type { ExperimentResult, MetricResult, Properties, VariantResult } from '@/types/experiment'
 
 // Abramowitz & Stegun approximation (max error: 1.5e-7)
 function erf(x: number): number {
@@ -18,7 +18,9 @@ function normalCDF(z: number): number {
   return 0.5 * (1 + erf(z / Math.sqrt(2)))
 }
 
-function zTest(control: Variant, challenger: Variant, alpha: number): VariantResult {
+type BinomialSample = { name: string; visitors: number; conversions: number }
+
+function zTest(control: BinomialSample, challenger: BinomialSample, alpha: number): VariantResult {
   const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
   const challengerRate = challenger.visitors > 0 ? challenger.conversions / challenger.visitors : 0
 
@@ -39,40 +41,19 @@ function zTest(control: Variant, challenger: Variant, alpha: number): VariantRes
   }
 }
 
-export function calculateCsvMetricResults(
-  variants: Variant[],
-  metrics: CsvMetric[],
-  confidenceLevel: number
-): CsvMetricResult[] {
-  const alpha = (1 - confidenceLevel) / Math.max(variants.length - 1, 1)
-  return metrics.map(metric => {
-    const variantsWithConversions: Variant[] = variants.map((v, i) => {
-      const visitors = metric.visitors?.[i] ?? v.visitors
-      return {
-        ...v,
-        visitors,
-        conversions: Math.min(Math.round((metric.rates[i] / 100) * visitors), visitors),
-      }
-    })
-    const control = variantsWithConversions[0]
-    const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
-    return {
-      metricName: metric.name,
-      control: { name: control.name, rate: controlRate },
-      challengers: variantsWithConversions.slice(1).map(c => zTest(control, c, alpha)),
-    }
-  })
+function buildSample(name: string, rate: number, n: number): BinomialSample {
+  const conversions = Math.min(Math.round(rate * n), n)
+  return { name, visitors: n, conversions }
 }
 
-export function calculateResults(variants: Variant[], confidenceLevel: number): ExperimentResult {
-  const control = variants[0]
-  const challengers = variants.slice(1)
-
-  // Bonferroni correction: divide alpha by number of comparisons to account for multiple testing
+// For binomial_single: properties holds exactly 1 metric.
+export function calculateResults(properties: Properties, confidenceLevel: number): ExperimentResult {
+  const { variant_names, metric_values, N } = properties
+  const samples = variant_names.map((name, i) => buildSample(name, metric_values[i][0], N[i][0]))
+  const control = samples[0]
+  const challengers = samples.slice(1)
   const alpha = (1 - confidenceLevel) / Math.max(challengers.length, 1)
-
   const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
-
   return {
     control: {
       name: control.name,
@@ -84,4 +65,31 @@ export function calculateResults(variants: Variant[], confidenceLevel: number): 
     },
     challengers: challengers.map(c => zTest(control, c, alpha)),
   }
+}
+
+// For multiple_measures: one MetricResult per metric.
+export function calculateMultipleMeasuresResults(
+  properties: Properties,
+  confidenceLevel: number
+): MetricResult[] {
+  const { variant_names, metric_names, metric_values, N, visitor_group_labels } = properties
+  const numMetrics = metric_names.length
+  const numChallengers = Math.max(variant_names.length - 1, 1)
+  const alpha = (1 - confidenceLevel) / numChallengers
+
+  const results: MetricResult[] = []
+  for (let m = 0; m < numMetrics; m++) {
+    const samples = variant_names.map((name, i) =>
+      buildSample(name, metric_values[i][m], N[i][m])
+    )
+    const control = samples[0]
+    const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
+    results.push({
+      metricName: metric_names[m],
+      visitorGroupLabel: visitor_group_labels[m] ?? '',
+      control: { name: control.name, rate: controlRate },
+      challengers: samples.slice(1).map(c => zTest(control, c, alpha)),
+    })
+  }
+  return results
 }
