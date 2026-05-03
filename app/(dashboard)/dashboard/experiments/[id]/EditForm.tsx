@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from 'react'
 import { updateExperiment } from '@/lib/actions/experiments'
-import type { Experiment } from '@/types/experiment'
+import type { Experiment, Properties } from '@/types/experiment'
 import SubmitButton from '@/components/ui/SubmitButton'
 
 const inputClass = 'border border-foreground/20 rounded-lg px-3 py-2 bg-background text-foreground text-sm outline-none focus:ring-2 focus:ring-brand w-full'
@@ -11,7 +11,10 @@ const labelClass = 'text-sm font-medium'
 export default function EditForm({ experiment }: { experiment: Experiment }) {
   const updateWithId = updateExperiment.bind(null, experiment.id)
   const [state, formAction, pending] = useActionState(updateWithId, undefined)
-  const [variantCount, setVariantCount] = useState(experiment.variants.length)
+  const props = experiment.properties
+  const [variantCount, setVariantCount] = useState(props.variant_names.length)
+
+  const isContinuous = props.experiment_type === 'continuous_single'
 
   const addVariant = () => {
     if (variantCount >= 6) return
@@ -61,9 +64,42 @@ export default function EditForm({ experiment }: { experiment: Experiment }) {
         </select>
       </div>
 
+      <div className="flex flex-col gap-1.5">
+        <label className={labelClass}>Metric type</label>
+        <div
+          className="inline-flex p-0.5 rounded-lg border border-foreground/10 bg-foreground/[0.02] w-fit opacity-70 cursor-not-allowed"
+          title="Metric type cannot be changed after creation"
+        >
+          <span className={`px-3 py-1.5 text-xs font-medium rounded-md ${!isContinuous ? 'bg-background text-foreground shadow-sm' : 'text-foreground/40'}`}>
+            Conversion rate
+          </span>
+          <span className={`px-3 py-1.5 text-xs font-medium rounded-md ${isContinuous ? 'bg-background text-foreground shadow-sm' : 'text-foreground/40'}`}>
+            Continuous metric
+          </span>
+        </div>
+        <p className="text-xs text-foreground/40">Locked after creation.</p>
+      </div>
+
+      {isContinuous && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor="metric_name" className={labelClass}>Metric name</label>
+          <input
+            id="metric_name"
+            name="metric_name"
+            type="text"
+            required
+            defaultValue={props.metric_names[0] ?? ''}
+            className={inputClass}
+          />
+          {state?.fieldErrors?.metric_name && (
+            <p className="text-xs text-red-500 mt-0.5">{state.fieldErrors.metric_name}</p>
+          )}
+        </div>
+      )}
+
       <div className="flex flex-col gap-3">
         {Array.from({ length: variantCount }).map((_, i) => {
-          const saved = experiment.variants[i]
+          const savedName = props.variant_names[i]
           return (
             <div key={i} className="border border-foreground/10 rounded-xl p-4 flex flex-col gap-4">
               <div className="flex items-center justify-between">
@@ -71,7 +107,7 @@ export default function EditForm({ experiment }: { experiment: Experiment }) {
                   name={`variant_name_${i}`}
                   type="text"
                   required
-                  defaultValue={saved?.name ?? getDefaultName(i)}
+                  defaultValue={savedName ?? getDefaultName(i)}
                   className="text-sm font-semibold bg-transparent outline-none border-b border-transparent focus:border-foreground/20 transition-colors"
                 />
                 {i === variantCount - 1 && i >= 2 && (
@@ -84,30 +120,11 @@ export default function EditForm({ experiment }: { experiment: Experiment }) {
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className={labelClass}>Visitors</label>
-                  <input
-                    name={`variant_visitors_${i}`}
-                    type="number"
-                    min="1"
-                    required
-                    defaultValue={saved?.visitors}
-                    className={inputClass}
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className={labelClass}>Conversions</label>
-                  <input
-                    name={`variant_conversions_${i}`}
-                    type="number"
-                    min="0"
-                    required
-                    defaultValue={saved?.conversions}
-                    className={inputClass}
-                  />
-                </div>
-              </div>
+              {isContinuous ? (
+                <ContinuousVariantFields index={i} props={props} />
+              ) : (
+                <BinomialVariantFields index={i} props={props} />
+              )}
             </div>
           )
         })}
@@ -151,5 +168,95 @@ export default function EditForm({ experiment }: { experiment: Experiment }) {
 
       <SubmitButton pending={pending} label="Save changes" pendingLabel="Saving..." />
     </form>
+  )
+}
+
+function BinomialVariantFields({ index, props }: { index: number; props: Properties }) {
+  const visitors = props.N[index]?.[0]
+  const rate = props.metric_values[index]?.[0]
+  const conversions = visitors !== undefined && rate !== undefined ? Math.round(rate * visitors) : undefined
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div className="flex flex-col gap-1">
+        <label className={labelClass}>Visitors</label>
+        <input
+          name={`variant_visitors_${index}`}
+          type="number"
+          min="1"
+          required
+          defaultValue={visitors ?? ''}
+          className={inputClass}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className={labelClass}>Conversions</label>
+        <input
+          name={`variant_conversions_${index}`}
+          type="number"
+          min="0"
+          required
+          defaultValue={conversions ?? ''}
+          className={inputClass}
+        />
+      </div>
+    </div>
+  )
+}
+
+function ContinuousVariantFields({ index, props }: { index: number; props: Properties }) {
+  const savedStdDev = props.std_dev?.[index]?.[0]
+  const initialStdDev = savedStdDev === null || savedStdDev === undefined ? '' : String(savedStdDev)
+  const [stdDev, setStdDev] = useState(initialStdDev)
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      <div className="flex flex-col gap-1">
+        <label className={labelClass}>Mean</label>
+        <input
+          name={`variant_mean_${index}`}
+          type="number"
+          step="any"
+          min="0"
+          required
+          defaultValue={props.metric_values[index]?.[0] ?? ''}
+          className={inputClass}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className={labelClass}>
+          Std dev
+          <span className="text-foreground/40 font-normal ml-1">(optional)</span>
+        </label>
+        <input
+          name={`variant_std_dev_${index}`}
+          type="number"
+          step="any"
+          min="0"
+          value={stdDev}
+          onChange={e => setStdDev(e.target.value)}
+          placeholder="optional"
+          className={inputClass}
+        />
+        {stdDev.trim() === '' && (
+          <p
+            className="text-[11px] text-amber-600 dark:text-amber-500 mt-0.5 leading-tight"
+            title="Std dev not provided. We'll estimate it as √mean. Less accurate for revenue or high-variance metrics."
+          >
+            ⚠ Using Poisson approximation
+          </p>
+        )}
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className={labelClass}>Sample size</label>
+        <input
+          name={`variant_sample_size_${index}`}
+          type="number"
+          min="2"
+          step="1"
+          required
+          defaultValue={props.N[index]?.[0] ?? ''}
+          className={inputClass}
+        />
+      </div>
+    </div>
   )
 }
