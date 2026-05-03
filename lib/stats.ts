@@ -1,4 +1,4 @@
-import type { Variant, VariantResult, ExperimentResult } from '@/types/experiment'
+import type { Variant, VariantResult, ExperimentResult, CsvMetric, CsvMetricResult } from '@/types/experiment'
 
 // Abramowitz & Stegun approximation (max error: 1.5e-7)
 function erf(x: number): number {
@@ -37,6 +37,31 @@ function zTest(control: Variant, challenger: Variant, alpha: number): VariantRes
     is_significant: pValue < alpha,
     uplift,
   }
+}
+
+export function calculateCsvMetricResults(
+  variants: Variant[],
+  metrics: CsvMetric[],
+  confidenceLevel: number
+): CsvMetricResult[] {
+  const alpha = (1 - confidenceLevel) / Math.max(variants.length - 1, 1)
+  return metrics.map(metric => {
+    const variantsWithConversions: Variant[] = variants.map((v, i) => {
+      const visitors = metric.visitors?.[i] ?? v.visitors
+      return {
+        ...v,
+        visitors,
+        conversions: Math.min(Math.round((metric.rates[i] / 100) * visitors), visitors),
+      }
+    })
+    const control = variantsWithConversions[0]
+    const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
+    return {
+      metricName: metric.name,
+      control: { name: control.name, rate: controlRate },
+      challengers: variantsWithConversions.slice(1).map(c => zTest(control, c, alpha)),
+    }
+  })
 }
 
 export function calculateResults(variants: Variant[], confidenceLevel: number): ExperimentResult {

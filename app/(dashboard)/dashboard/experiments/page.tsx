@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { getExperiments } from '@/lib/actions/experiments'
-import type { SortField, SortOrder, ExperimentFilters } from '@/lib/actions/experiments'
+import type { SortField, SortOrder, ExperimentFilters } from '@/lib/actions/experiments.types'
 import Link from 'next/link'
 import { Suspense } from 'react'
 import ExperimentCard from '@/components/experiments/ExperimentCard'

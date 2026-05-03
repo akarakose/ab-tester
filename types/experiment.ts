@@ -6,6 +6,19 @@ export type Variant = {
   conversions: number
 }
 
+export type CsvMetric = {
+  name: string
+  rates: number[]
+  visitors?: number[]
+  visitorGroupLabel?: string
+}
+
+export type CsvMetricResult = {
+  metricName: string
+  control: { name: string; rate: number }
+  challengers: VariantResult[]
+}
+
 export type Experiment = {
   id: string
   user_id: string
@@ -13,6 +26,7 @@ export type Experiment = {
   status: ExperimentStatus
   variants: Variant[]
   confidence_level: number
+  metrics: CsvMetric[] | null
   ai_summary: string | null
   created_at: string
   updated_at: string

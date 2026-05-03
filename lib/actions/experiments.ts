@@ -1,12 +1,36 @@
 'use server'
 
+import * as Sentry from '@sentry/nextjs'
 import { cache } from 'react'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import type { Experiment, Variant } from '@/types/experiment'
+import type {
+  CsvExperimentInput,
+  CsvExperimentUpdateInput,
+  CsvMetricInput,
+  ExperimentActionState,
+  ExperimentFilters,
+  SortField,
+  SortOrder,
+} from './experiments.types'
 
-export type ExperimentActionState = { error?: string } | undefined
+function sanitizeText(value: string): string {
+  return value.replace(/<[^>]*>/g, '')
+}
+
+function isNextInternalError(error: unknown): boolean {
+  return ((error as { digest?: string })?.digest ?? '').startsWith('NEXT_')
+}
+
+const VALID_STATUSES = ['draft', 'running', 'concluded'] as const
+const STATUS_ORDER: Record<string, number> = { running: 0, draft: 1, concluded: 2 }
+const MAX_VARIANTS = 6
+const MIN_VARIANTS = 2
+const MAX_METRICS = 300
+const MAX_NAME_LENGTH = 200
+const MAX_LABEL_LENGTH = 100
 
 const getAuthenticatedUser = cache(async () => {
   const supabase = await createClient()
@@ -15,21 +39,33 @@ const getAuthenticatedUser = cache(async () => {
   return { supabase, user: session.user }
 })
 
+function revalidateExperimentPaths(id?: string) {
+  revalidatePath('/dashboard/experiments')
+  if (id) revalidatePath(`/dashboard/experiments/${id}`)
+}
+
+function validateCommonFields({ name, confidence, status }: { name: string; confidence: number; status?: string }): string | null {
+  if (!name) return 'Experiment name is required.'
+  if (name.length > MAX_NAME_LENGTH) return `Experiment name must be ${MAX_NAME_LENGTH} characters or fewer.`
+  if (!Number.isFinite(confidence) || confidence < 50 || confidence >= 100) return 'Confidence level must be between 50 and 99.9.'
+  if (status !== undefined && !VALID_STATUSES.includes(status as typeof VALID_STATUSES[number])) return 'Invalid status.'
+  return null
+}
+
 function parseVariants(formData: FormData): { variants: Variant[] } | { error: string } {
-  const countRaw = formData.get('variant_count')
-  const count = Number(countRaw)
-  if (!Number.isInteger(count) || count < 2) return { error: 'At least 2 variants (control + one challenger) are required.' }
-  if (count > 6) return { error: 'Maximum 6 variants allowed.' }
+  const count = Number(formData.get('variant_count'))
+  if (!Number.isInteger(count) || count < MIN_VARIANTS) return { error: 'At least 2 variants (control + one challenger) are required.' }
+  if (count > MAX_VARIANTS) return { error: `Maximum ${MAX_VARIANTS} variants allowed.` }
 
   const variants: Variant[] = []
   for (let i = 0; i < count; i++) {
-    const name = (formData.get(`variant_name_${i}`) as string)?.trim()
+    const name = sanitizeText((formData.get(`variant_name_${i}`) as string)?.trim() ?? '')
     const visitors = Number(formData.get(`variant_visitors_${i}`))
     const conversions = Number(formData.get(`variant_conversions_${i}`))
 
     if (!name) return { error: `Variant ${i + 1} must have a name.` }
-    if (visitors <= 0) return { error: `"${name}" visitors must be greater than 0.` }
-    if (conversions < 0) return { error: `"${name}" conversions cannot be negative.` }
+    if (!Number.isFinite(visitors) || !Number.isInteger(visitors) || visitors <= 0) return { error: `"${name}" visitors must be a whole number greater than 0.` }
+    if (!Number.isFinite(conversions) || !Number.isInteger(conversions) || conversions < 0) return { error: `"${name}" conversions must be a whole number that is not negative.` }
     if (conversions > visitors) return { error: `"${name}" conversions cannot exceed visitors.` }
 
     variants.push({ name, visitors, conversions })
@@ -41,18 +77,47 @@ function parseVariants(formData: FormData): { variants: Variant[] } | { error: s
   return { variants }
 }
 
-const STATUS_ORDER: Record<string, number> = { running: 0, draft: 1, concluded: 2 }
+function validateCsvBase(input: { variantNames: string[]; metrics: CsvMetricInput[] }): string | null {
+  if (!Array.isArray(input.variantNames) || !Array.isArray(input.metrics)) return 'Invalid input shape.'
+  if (input.variantNames.length < MIN_VARIANTS) return 'At least 2 variants are required.'
+  if (input.variantNames.length > MAX_VARIANTS) return `Maximum ${MAX_VARIANTS} variants allowed.`
+  if (input.variantNames.some(n => typeof n !== 'string')) return 'Variant names must be strings.'
+  if (input.variantNames.some(n => n.length > MAX_NAME_LENGTH)) return `Variant names must be ${MAX_NAME_LENGTH} characters or fewer.`
 
-export type SortField = 'name' | 'created_at' | 'updated_at' | 'status'
-export type SortOrder = 'asc' | 'desc'
+  const uniqueVariants = new Set(input.variantNames.map(n => n.toLowerCase()))
+  if (uniqueVariants.size !== input.variantNames.length) return 'Variant names must be unique.'
 
-export type ExperimentFilters = {
-  name?: string
-  status?: string
-  createdFrom?: string
-  createdTo?: string
-  updatedFrom?: string
-  updatedTo?: string
+  if (input.metrics.length === 0) return 'At least one metric is required.'
+  if (input.metrics.length > MAX_METRICS) return `Maximum ${MAX_METRICS} metrics allowed.`
+
+  for (const m of input.metrics) {
+    if (typeof m.name !== 'string') return 'Metric names must be strings.'
+    if (m.name.length > MAX_NAME_LENGTH) return `Metric names must be ${MAX_NAME_LENGTH} characters or fewer.`
+    if (m.visitorGroupLabel !== undefined && (typeof m.visitorGroupLabel !== 'string' || m.visitorGroupLabel.length > MAX_LABEL_LENGTH))
+      return `Visitor group labels must be strings of ${MAX_LABEL_LENGTH} characters or fewer.`
+    if (!Array.isArray(m.rates) || !Array.isArray(m.visitors)) return `Metric "${m.name}" has invalid shape.`
+    if (m.rates.length !== input.variantNames.length) return `Metric "${m.name}" needs a rate for every variant.`
+    if (m.rates.some(r => !Number.isFinite(r) || r < 0 || r > 100)) return `Metric "${m.name}" has invalid rates — values must be between 0 and 100.`
+    if (m.visitors.length !== input.variantNames.length) return 'Each metric needs a visitor count for every variant.'
+    if (m.visitors.some(v => !Number.isFinite(v) || v <= 0)) return 'All visitor counts must be greater than 0.'
+  }
+  return null
+}
+
+function buildCsvPayload(variantNames: string[], metrics: CsvMetricInput[]): { variants: Variant[]; metrics: CsvMetricInput[] } {
+  const defaultVisitors = metrics[0].visitors
+  const variants: Variant[] = variantNames.map((name, i) => ({
+    name,
+    visitors: defaultVisitors[i],
+    conversions: 0,
+  }))
+  const cleanedMetrics = metrics.map(({ name, rates, visitors, visitorGroupLabel }) => ({
+    name,
+    rates,
+    visitors,
+    ...(visitorGroupLabel ? { visitorGroupLabel } : {}),
+  }))
+  return { variants, metrics: cleanedMetrics }
 }
 
 export async function getExperiments(
@@ -108,29 +173,36 @@ export async function createExperiment(
   _prevState: ExperimentActionState,
   formData: FormData
 ): Promise<ExperimentActionState> {
-  const { supabase, user } = await getAuthenticatedUser()
+  try {
+    const { supabase, user } = await getAuthenticatedUser()
 
-  const name = (formData.get('name') as string)?.trim()
-  const confidencePct = Number(formData.get('confidence_level'))
+    const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
+    const confidence = Number(formData.get('confidence_level'))
 
-  if (!name) return { error: 'Experiment name is required.' }
-  if (confidencePct < 50 || confidencePct >= 100) return { error: 'Confidence level must be between 50 and 99.9.' }
+    if (!name) return { fieldErrors: { name: 'Experiment name is required.' } }
+    if (name.length > MAX_NAME_LENGTH) return { fieldErrors: { name: `Experiment name must be ${MAX_NAME_LENGTH} characters or fewer.` } }
+    if (!Number.isFinite(confidence) || confidence < 50 || confidence >= 100) return { fieldErrors: { confidence_level: 'Confidence level must be between 50 and 99.9.' } }
 
-  const parsed = parseVariants(formData)
-  if ('error' in parsed) return { error: parsed.error }
+    const parsed = parseVariants(formData)
+    if ('error' in parsed) return { fieldErrors: { variants: parsed.error } }
 
-  const { error } = await supabase.from('experiments').insert({
-    user_id: user.id,
-    name,
-    status: 'draft',
-    variants: parsed.variants,
-    confidence_level: confidencePct / 100,
-  })
+    const { error } = await supabase.from('experiments').insert({
+      user_id: user.id,
+      name,
+      status: 'draft',
+      variants: parsed.variants,
+      confidence_level: confidence / 100,
+    })
 
-  if (error) return { error: error.message }
+    if (error) return { error: error.message }
 
-  revalidatePath('/dashboard/experiments')
-  redirect('/dashboard/experiments')
+    revalidateExperimentPaths()
+    redirect('/dashboard/experiments')
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
 }
 
 export async function updateExperiment(
@@ -138,43 +210,138 @@ export async function updateExperiment(
   _prevState: ExperimentActionState,
   formData: FormData
 ): Promise<ExperimentActionState> {
-  const { supabase } = await getAuthenticatedUser()
+  try {
+    const { supabase } = await getAuthenticatedUser()
 
-  const name = (formData.get('name') as string)?.trim()
-  const confidencePct = Number(formData.get('confidence_level'))
-  const status = formData.get('status') as string
+    const name = sanitizeText((formData.get('name') as string)?.trim() ?? '')
+    const confidence = Number(formData.get('confidence_level'))
+    const status = formData.get('status') as string
 
-  if (!name) return { error: 'Experiment name is required.' }
-  if (confidencePct < 50 || confidencePct >= 100) return { error: 'Confidence level must be between 50 and 99.9.' }
-  if (!['draft', 'running', 'concluded'].includes(status)) return { error: 'Invalid status.' }
+    if (!name) return { fieldErrors: { name: 'Experiment name is required.' } }
+    if (name.length > MAX_NAME_LENGTH) return { fieldErrors: { name: `Experiment name must be ${MAX_NAME_LENGTH} characters or fewer.` } }
+    if (!Number.isFinite(confidence) || confidence < 50 || confidence >= 100) return { fieldErrors: { confidence_level: 'Confidence level must be between 50 and 99.9.' } }
+    if (!VALID_STATUSES.includes(status as typeof VALID_STATUSES[number])) return { error: 'Invalid status.' }
 
-  const parsed = parseVariants(formData)
-  if ('error' in parsed) return { error: parsed.error }
+    const parsed = parseVariants(formData)
+    if ('error' in parsed) return { fieldErrors: { variants: parsed.error } }
 
-  const { error } = await supabase
-    .from('experiments')
-    .update({
-      name,
-      status,
-      variants: parsed.variants,
-      confidence_level: confidencePct / 100,
+    const { error } = await supabase
+      .from('experiments')
+      .update({
+        name,
+        status,
+        variants: parsed.variants,
+        confidence_level: confidence / 100,
+      })
+      .eq('id', id)
+
+    if (error) return { error: error.message }
+
+    revalidateExperimentPaths(id)
+    redirect(`/dashboard/experiments/${id}`)
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
+}
+
+export async function createExperimentsFromCsv(
+  input: CsvExperimentInput
+): Promise<{ error?: string }> {
+  try {
+    const { supabase, user } = await getAuthenticatedUser()
+    const experimentName = sanitizeText(input.experimentName)
+    const variantNames = input.variantNames.map(sanitizeText)
+    const metrics = input.metrics.map(m => ({
+      name: sanitizeText(m.name),
+      rates: m.rates,
+      visitors: m.visitors,
+      ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
+    }))
+    const { confidenceLevel } = input
+
+    const baseError = validateCommonFields({ name: experimentName, confidence: confidenceLevel })
+    if (baseError) return { error: baseError }
+
+    const csvError = validateCsvBase({ variantNames, metrics })
+    if (csvError) return { error: csvError }
+
+    const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
+
+    const { error } = await supabase.from('experiments').insert({
+      user_id: user.id,
+      name: experimentName,
+      status: 'draft' as const,
+      variants,
+      metrics: csvMetrics,
+      confidence_level: confidenceLevel / 100,
     })
-    .eq('id', id)
 
-  if (error) return { error: error.message }
+    if (error) return { error: error.message }
 
-  revalidatePath('/dashboard/experiments')
-  revalidatePath(`/dashboard/experiments/${id}`)
-  redirect(`/dashboard/experiments/${id}`)
+    revalidateExperimentPaths()
+    return {}
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
+}
+
+export async function updateCsvExperiment(
+  id: string,
+  input: CsvExperimentUpdateInput
+): Promise<{ error?: string }> {
+  try {
+    const { supabase } = await getAuthenticatedUser()
+    const name = sanitizeText(input.name)
+    const variantNames = input.variantNames.map(sanitizeText)
+    const metrics = input.metrics.map(m => ({
+      name: sanitizeText(m.name),
+      rates: m.rates,
+      visitors: m.visitors,
+      ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
+    }))
+    const { status, confidenceLevel } = input
+
+    const baseError = validateCommonFields({ name, confidence: confidenceLevel, status })
+    if (baseError) return { error: baseError }
+
+    const csvError = validateCsvBase({ variantNames, metrics })
+    if (csvError) return { error: csvError }
+
+    const { variants, metrics: csvMetrics } = buildCsvPayload(variantNames, metrics)
+
+    const { error } = await supabase
+      .from('experiments')
+      .update({ name, status, variants, metrics: csvMetrics, confidence_level: confidenceLevel / 100 })
+      .eq('id', id)
+
+    if (error) return { error: error.message }
+
+    revalidateExperimentPaths(id)
+    redirect(`/dashboard/experiments/${id}`)
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
 }
 
 export async function deleteExperiment(id: string): Promise<{ error: string } | void> {
-  const { supabase } = await getAuthenticatedUser()
-  const { error } = await supabase
-    .from('experiments')
-    .update({ deleted_at: new Date().toISOString() })
-    .eq('id', id)
-  if (error) return { error: error.message }
-  revalidatePath('/dashboard/experiments')
-  redirect('/dashboard/experiments')
+  try {
+    const { supabase } = await getAuthenticatedUser()
+    const { error } = await supabase
+      .from('experiments')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) return { error: error.message }
+    revalidateExperimentPaths()
+    redirect('/dashboard/experiments')
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
 }
