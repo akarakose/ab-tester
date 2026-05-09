@@ -24,9 +24,12 @@ export type ExperimentFilters = {
 
 export type CsvMetricInput = {
   name: string
-  rates: number[]
-  visitors: number[]
+  type: 'binomial' | 'continuous' | 'no_test'
+  values: number[]                    // rates 0..100 for binomial; means for continuous; raw values for no_test
+  visitors: number[]                  // visitors for binomial; sample_sizes for continuous; ignored for no_test
+  std_devs?: (number | null)[]        // continuous only; per-variant; null = Poisson estimate
   visitorGroupLabel?: string
+  format?: string                     // display format detected at upload time (see lib/format.ts fmtValue)
 }
 
 export type CsvExperimentInput = {

@@ -2,45 +2,142 @@
 
 import { useState, useRef, useTransition } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { createExperimentsFromCsv } from '@/lib/actions/experiments'
+import type { CsvMetricInput } from '@/lib/actions/experiments.types'
 import SubmitButton from '@/components/ui/SubmitButton'
+import { detectMetricType } from '@/lib/logic/metricDetection'
+import { fmtValue } from '@/lib/format'
 
 const inputClass = 'border border-foreground/20 rounded-lg px-3 py-2 bg-background text-foreground text-sm outline-none focus:ring-2 focus:ring-brand w-full'
 const labelClass = 'text-sm font-medium'
 
+type MetricKind = 'binomial' | 'continuous' | 'no_test'
+
+type ParsedRow = {
+  metric: string
+  values: number[]
+  type: MetricKind
+  autoDetected: boolean       // true when set by autodetection (not range-forced and not user override)
+  forcedContinuous: boolean   // true when range outside [0,100] forces continuous
+  format: string              // display format detected from raw CSV values
+}
+
 type ParsedCsv = {
   variantNames: string[]
-  rows: { metric: string; values: number[] }[]
+  rows: ParsedRow[]
 }
 
 type VisitorGroup = { visitors: number[]; metricIndices: number[]; label: string }
+
+function splitCsvRow(line: string): string[] {
+  const cols: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      inQuotes = !inQuotes
+    } else if (ch === ',' && !inQuotes) {
+      cols.push(current.trim())
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  cols.push(current.trim())
+  return cols
+}
+
+type DecimalFormat = 'us' | 'eu'
+
+// Decide whether the CSV uses '.' (US) or ',' (EU) as the decimal separator.
+// Looks for tokens like "1.50" (us) vs "1,50" (eu) and ignores 3-digit groupings,
+// which can be either decimals (1.500) or thousands separators (1,000).
+function detectDecimalFormat(rawValues: string[]): DecimalFormat {
+  let euVotes = 0
+  let usVotes = 0
+  for (const raw of rawValues) {
+    if (/,\d{1,2}\b/.test(raw) && !/,\d{3}\b/.test(raw)) euVotes++
+    if (/\.\d{1,2}\b/.test(raw) && !/\.\d{3}\b/.test(raw)) usVotes++
+  }
+  return euVotes > usVotes ? 'eu' : 'us'
+}
+
+function toNumber(raw: string, format: DecimalFormat): number {
+  // Strip currency symbols, percent signs, whitespace — keep digits, separators, minus.
+  const stripped = raw.replace(/[^\d.,\-]/g, '')
+  if (stripped === '') return NaN
+  const normalized = format === 'eu'
+    ? stripped.replace(/\./g, '').replace(',', '.')
+    : stripped.replace(/,/g, '')
+  return parseFloat(normalized)
+}
+
+const CURRENCY_SYM_RE = /[$€£¥₩₺₴₦₨₱฿₫]/
+
+// Returns a format string for fmtValue based on what the user actually typed.
+function detectRowFormat(rawValues: string[], parsedValues: number[]): string {
+  if (rawValues.some(v => v.trim().endsWith('%'))) return 'percentage'
+  const symMatch = rawValues.map(v => v.match(CURRENCY_SYM_RE)).find(m => m !== null)
+  if (symMatch) {
+    const sym = symMatch[0]
+    const isInt = parsedValues.every(v => Number.isFinite(v) && v === Math.floor(v))
+    return isInt ? `currency_int:${sym}` : `currency:${sym}`
+  }
+  const isInt = parsedValues.every(v => Number.isFinite(v) && v === Math.floor(v))
+  return isInt ? 'integer' : 'decimal'
+}
 
 function parseCsv(text: string): ParsedCsv | string {
   const lines = text.trim().split('\n').filter(l => l.trim())
   if (lines.length < 2) return 'CSV must have a header row and at least one data row.'
 
-  const header = lines[0].split(',').map(h => h.trim())
+  const header = splitCsvRow(lines[0]).map(h => h.trim())
   const variantNames = header.slice(1).filter(Boolean)
   if (variantNames.length < 2) return 'CSV must have at least two variant columns.'
 
   if (variantNames.some(n => /<[^>]*>/.test(n)))
     return 'Column headers must be plain text with no HTML tags.'
 
-  const rows: ParsedCsv['rows'] = []
+  type DataRow = { lineIndex: number; metric: string; rawValues: string[] }
+  const dataRows: DataRow[] = []
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',').map(c => c.trim())
+    const cols = splitCsvRow(lines[i])
     const metric = cols[0]
     if (!metric) continue
-
     if (/<[^>]*>/.test(metric))
       return `Row ${i + 1}: metric names must be plain text with no HTML tags.`
+    dataRows.push({ lineIndex: i, metric, rawValues: cols.slice(1, variantNames.length + 1) })
+  }
 
-    const values = cols.slice(1, variantNames.length + 1).map(v => parseFloat(v))
+  const format = detectDecimalFormat(dataRows.flatMap(r => r.rawValues))
+
+  const rows: ParsedRow[] = []
+  for (const { lineIndex: i, metric, rawValues } of dataRows) {
+    const values = rawValues.map(v => toNumber(v, format))
     if (values.some(v => isNaN(v))) return `Row ${i + 1} ("${metric}") contains non-numeric values.`
-    if (values.some(v => v < 0 || v > 100)) return `Row ${i + 1} ("${metric}") has values outside the 0–100% range.`
 
-    rows.push({ metric, values })
+    const detection = detectMetricType(metric, values)
+    if (detection.type === 'no_test') {
+      // No-test detected from header keywords — values can be anything.
+    } else if (detection.type === 'continuous' && detection.reason !== 'range') {
+      // Continuous from header hint — values can be anything, no range validation
+    } else if (detection.type === 'binomial' && values.some(v => v < 0 || v > 100)) {
+      // Conflict: detected binomial but values exceed 0–100. Override to continuous.
+      detection.type = 'continuous'
+      detection.reason = 'range'
+    } else if (detection.type === 'continuous' && values.some(v => v <= 0)) {
+      return `Row ${i + 1} ("${metric}") has non-positive values — continuous metrics must be positive.`
+    }
+
+    rows.push({
+      metric,
+      values,
+      type: detection.type,
+      autoDetected: detection.confident,
+      forcedContinuous: detection.reason === 'range',
+      format: detectRowFormat(rawValues, values),
+    })
   }
 
   if (rows.length === 0) return 'No valid data rows found.'
@@ -48,15 +145,18 @@ function parseCsv(text: string): ParsedCsv | string {
 }
 
 export default function NewExperimentCsvPage() {
-  const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [parsed, setParsed] = useState<ParsedCsv | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [fieldErrors, setFieldErrors] = useState<{ name?: string; confidence_level?: string; visitors?: string }>({})
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; confidence_level?: string; visitors?: string; metrics?: string }>({})
 
   const [groups, setGroups] = useState<VisitorGroup[]>([])
+  // Per-metric std_dev grid: stdDevs[metricIdx][variantIdx] — null = Poisson
+  const [stdDevs, setStdDevs] = useState<(string)[][]>([])
+  // Per-metric expansion of std_dev row
+  const [showStdDev, setShowStdDev] = useState<boolean[]>([])
   const [isPending, startTransition] = useTransition()
 
   const handleFile = (file: File) => {
@@ -72,19 +172,54 @@ export default function NewExperimentCsvPage() {
         setParseError(result)
         setParsed(null)
         setGroups([])
+        setStdDevs([])
+        setShowStdDev([])
       } else {
         setParsed(result)
         setGroups([{
           visitors: result.variantNames.map(() => 0),
-          metricIndices: result.rows.map((_, i) => i),
+          metricIndices: result.rows.map((_, i) => i).filter(i => result.rows[i].type !== 'no_test'),
           label: '',
         }])
+        setStdDevs(result.rows.map(() => result.variantNames.map(() => '')))
+        setShowStdDev(result.rows.map(() => false))
         setParseError(null)
         setSubmitError(null)
       }
     }
     reader.readAsText(file)
   }
+
+  const setMetricType = (mi: number, type: MetricKind) => {
+    if (!parsed) return
+    const row = parsed.rows[mi]
+    if (row.forcedContinuous && type === 'binomial') return  // can't downgrade if values are out of [0,100]
+    const wasNoTest = row.type === 'no_test'
+    const isNoTest = type === 'no_test'
+    setParsed({
+      ...parsed,
+      rows: parsed.rows.map((r, idx) => idx === mi ? { ...r, type, autoDetected: false } : r),
+    })
+    if (wasNoTest !== isNoTest) {
+      setGroups(prev => prev.map((g, gi) => {
+        if (isNoTest) {
+          return { ...g, metricIndices: g.metricIndices.filter(m => m !== mi) }
+        }
+        if (gi === 0) {
+          return { ...g, metricIndices: Array.from(new Set([...g.metricIndices, mi])).sort((a, b) => a - b) }
+        }
+        return g
+      }))
+    }
+  }
+
+  const toggleStdDev = (mi: number) =>
+    setShowStdDev(prev => prev.map((v, idx) => idx === mi ? !v : v))
+
+  const updateStdDev = (mi: number, vi: number, value: string) =>
+    setStdDevs(prev => prev.map((row, idx) =>
+      idx === mi ? row.map((v, j) => j === vi ? value : v) : row
+    ))
 
   const updateGroupVisitor = (gi: number, vi: number, value: number) =>
     setGroups(prev => prev.map((g, idx) => idx === gi
@@ -134,18 +269,70 @@ export default function NewExperimentCsvPage() {
     const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim()
     const confidence = Number((form.elements.namedItem('confidence_level') as HTMLInputElement).value)
 
-    const errors: { name?: string; confidence_level?: string; visitors?: string } = {}
+    const errors: { name?: string; confidence_level?: string; visitors?: string; metrics?: string } = {}
     if (!name) errors.name = 'Experiment name is required.'
     if (confidence < 50 || confidence >= 100) errors.confidence_level = 'Confidence level must be between 50 and 99.9.'
 
     const activeGroups = groups.filter(g => g.metricIndices.length > 0)
     if (activeGroups.some(g => g.visitors.some(v => !v || v <= 0))) errors.visitors = 'All visitor counts must be greater than 0.'
 
-    const metricsWithVisitors = parsed.rows.map((row, mi) => {
+    // Per-metric validation
+    for (let mi = 0; mi < parsed.rows.length; mi++) {
+      const row = parsed.rows[mi]
+      if (row.type === 'binomial' && row.values.some(v => v < 0 || v > 100)) {
+        errors.metrics = `Metric "${row.metric}" rates must be between 0 and 100.`
+        break
+      }
+      if (row.type === 'continuous' && row.values.some(v => v <= 0)) {
+        errors.metrics = `Metric "${row.metric}" means must be positive.`
+        break
+      }
+      if (row.type === 'continuous') {
+        for (let vi = 0; vi < parsed.variantNames.length; vi++) {
+          const raw = stdDevs[mi]?.[vi]?.trim() ?? ''
+          if (raw !== '') {
+            const sd = Number(raw)
+            if (!Number.isFinite(sd) || sd <= 0) {
+              errors.metrics = `Metric "${row.metric}" std dev must be greater than 0.`
+              break
+            }
+          }
+        }
+        if (errors.metrics) break
+      }
+    }
+
+    const metrics: (CsvMetricInput | null)[] = parsed.rows.map((row, mi) => {
+      if (row.type === 'no_test') {
+        return {
+          name: row.metric,
+          type: 'no_test',
+          values: row.values,
+          visitors: parsed.variantNames.map(() => 0),
+          format: row.format,
+        }
+      }
       const group = activeGroups.find(g => g.metricIndices.includes(mi))
-      return group ? { name: row.metric, rates: row.values, visitors: group.visitors, visitorGroupLabel: group.label || undefined } : null
+      if (!group) return null
+      const base: CsvMetricInput = {
+        name: row.metric,
+        type: row.type,
+        values: row.values,
+        visitors: group.visitors,
+        format: row.format,
+        ...(group.label ? { visitorGroupLabel: group.label } : {}),
+      }
+      if (row.type === 'continuous') {
+        base.std_devs = (stdDevs[mi] ?? []).map(s => {
+          const t = s.trim()
+          if (t === '') return null
+          const n = Number(t)
+          return Number.isFinite(n) && n > 0 ? n : null
+        })
+      }
+      return base
     })
-    if (metricsWithVisitors.some(m => m === null)) errors.visitors = 'Every metric must be assigned to a visitor group.'
+    if (metrics.some(m => m === null)) errors.visitors = 'Every testable metric must be assigned to a visitor group.'
 
     if (Object.keys(errors).length > 0) { setFieldErrors(errors); return }
     setFieldErrors({})
@@ -154,14 +341,11 @@ export default function NewExperimentCsvPage() {
       const result = await createExperimentsFromCsv({
         experimentName: name,
         variantNames: parsed.variantNames,
-        metrics: metricsWithVisitors as { name: string; rates: number[]; visitors: number[]; visitorGroupLabel?: string }[],
+        metrics: metrics as CsvMetricInput[],
         confidenceLevel: confidence,
       })
-      if (result?.error) {
-        setSubmitError(result.error)
-      } else {
-        router.push('/dashboard/experiments')
-      }
+      if (result?.error) setSubmitError(result.error)
+      // On success the server action redirects to the new experiment's detail page.
     })
   }
 
@@ -204,21 +388,20 @@ export default function NewExperimentCsvPage() {
 
           <div className="mt-4 rounded-lg border border-foreground/10 p-4" style={{ backgroundColor: 'color-mix(in srgb, var(--foreground) 3%, var(--background))' }}>
             <p className="text-xs font-medium text-foreground/50 mb-2">Expected format</p>
-            <pre className="text-xs text-foreground/60 font-mono leading-relaxed">{`measure_name,variant_a,variant_b\nConversion Rate,5.20,6.10\nClick Rate,12.30,14.50`}</pre>
-            <p className="text-xs text-foreground/40 mt-2">Values are percentages (0–100). Visitor counts are entered after uploading.</p>
+            <pre className="text-xs text-foreground/60 font-mono leading-relaxed">{`measure_name,variant_a,variant_b\nConversion Rate,5.20,6.10\nRevenue per User,1.32,1.97`}</pre>
+            <p className="text-xs text-foreground/40 mt-2">Each row will be auto-classified as a conversion rate (0–100%) or continuous metric. Visitor counts and std devs are entered after uploading.</p>
           </div>
 
           {parseError && <p className="mt-3 text-sm text-red-500">{parseError}</p>}
         </>
       ) : (
         <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-          {/* Preview table */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium">{parsed.rows.length} metric{parsed.rows.length !== 1 ? 's' : ''} detected</p>
               <button
                 type="button"
-                onClick={() => { setParsed(null); setParseError(null); setGroups([]) }}
+                onClick={() => { setParsed(null); setParseError(null); setGroups([]); setStdDevs([]); setShowStdDev([]) }}
                 className="text-xs text-foreground/40 hover:text-foreground transition-colors"
               >
                 Upload different file
@@ -229,6 +412,7 @@ export default function NewExperimentCsvPage() {
                 <thead>
                   <tr className="border-b border-foreground/10" style={{ backgroundColor: 'color-mix(in srgb, var(--foreground) 4%, var(--background))' }}>
                     <th className="text-left px-4 py-2.5 text-xs font-medium text-foreground/50">Metric</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-medium text-foreground/50">Type</th>
                     {parsed.variantNames.map(name => (
                       <th key={name} className="text-right px-4 py-2.5 text-xs font-medium text-foreground/50">{name}</th>
                     ))}
@@ -236,19 +420,103 @@ export default function NewExperimentCsvPage() {
                 </thead>
                 <tbody>
                   {parsed.rows.map((row, i) => (
-                    <tr key={i} className={i < parsed.rows.length - 1 ? 'border-b border-foreground/8' : ''}>
-                      <td className="px-4 py-2.5 font-medium">{row.metric}</td>
-                      {row.values.map((val, j) => (
-                        <td key={j} className="px-4 py-2.5 text-right text-foreground/70">{val.toFixed(2)}%</td>
-                      ))}
-                    </tr>
+                    <>
+                      <tr key={`m-${i}`} className="border-b border-foreground/8 last:border-0">
+                        <td className="px-4 py-2.5 font-medium align-top">
+                          {row.metric}
+                          {row.autoDetected && (
+                            <span className="ml-1.5 text-[10px] text-foreground/40 font-normal" title="Type auto-detected from header">auto</span>
+                          )}
+                          {row.forcedContinuous && (
+                            <span className="ml-1.5 text-[10px] text-amber-600 dark:text-amber-500 font-normal" title="Values out of 0–100 range — must be continuous">forced</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 align-top">
+                          <div className="inline-flex p-0.5 rounded-md border border-foreground/15 bg-foreground/[0.02]">
+                            <button
+                              type="button"
+                              onClick={() => setMetricType(i, 'binomial')}
+                              disabled={row.forcedContinuous}
+                              className={`px-2 py-1 text-[11px] font-medium rounded transition-all ${
+                                row.type === 'binomial'
+                                  ? 'bg-background text-foreground shadow-sm'
+                                  : 'text-foreground/45 hover:text-foreground/70'
+                              } ${row.forcedContinuous ? 'opacity-40 cursor-not-allowed' : ''}`}
+                              title={row.forcedContinuous ? 'Values exceed 0–100 — must be continuous' : ''}
+                            >
+                              Binomial
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMetricType(i, 'continuous')}
+                              className={`px-2 py-1 text-[11px] font-medium rounded transition-all ${
+                                row.type === 'continuous'
+                                  ? 'bg-background text-foreground shadow-sm'
+                                  : 'text-foreground/45 hover:text-foreground/70'
+                              }`}
+                            >
+                              Continuous
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMetricType(i, 'no_test')}
+                              className={`px-2 py-1 text-[11px] font-medium rounded transition-all ${
+                                row.type === 'no_test'
+                                  ? 'bg-background text-foreground shadow-sm'
+                                  : 'text-foreground/45 hover:text-foreground/70'
+                              }`}
+                              title="No statistical test will be applied"
+                            >
+                              No test
+                            </button>
+                          </div>
+                          {row.type === 'continuous' && (
+                            <button
+                              type="button"
+                              onClick={() => toggleStdDev(i)}
+                              className="block mt-1.5 text-[11px] text-brand hover:opacity-75 transition-opacity"
+                            >
+                              {showStdDev[i] ? 'Hide std devs' : '+ Add std devs (optional)'}
+                            </button>
+                          )}
+                          {row.type === 'no_test' && (
+                            <p className="mt-1.5 text-[11px] text-foreground/40">No significance test</p>
+                          )}
+                        </td>
+                        {row.values.map((val, j) => (
+                          <td key={j} className="px-4 py-2.5 text-right text-foreground/70 align-top">
+                            {fmtValue(val, row.format)}
+                          </td>
+                        ))}
+                      </tr>
+                      {row.type === 'continuous' && showStdDev[i] && (
+                        <tr key={`s-${i}`} className="border-b border-foreground/8 last:border-0 bg-foreground/[0.015]">
+                          <td className="px-4 py-2 text-xs text-foreground/50 font-medium" colSpan={2}>
+                            ↳ Std dev <span className="text-foreground/30 font-normal">(optional, Poisson if blank)</span>
+                          </td>
+                          {parsed.variantNames.map((_, vi) => (
+                            <td key={vi} className="px-2 py-1.5">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                value={stdDevs[i]?.[vi] ?? ''}
+                                onChange={e => updateStdDev(i, vi, e.target.value)}
+                                placeholder="auto"
+                                className="w-full text-right text-xs border border-foreground/15 rounded px-2 py-1 bg-background outline-none focus:border-foreground/35"
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      )}
+                    </>
                   ))}
                 </tbody>
               </table>
             </div>
+            {fieldErrors.metrics && <p className="text-sm text-red-500 mt-2">{fieldErrors.metrics}</p>}
           </div>
 
-          {/* Experiment name */}
           <div className="flex flex-col gap-1">
             <label htmlFor="name" className={labelClass}>Experiment name</label>
             <input
@@ -264,12 +532,11 @@ export default function NewExperimentCsvPage() {
             )}
           </div>
 
-          {/* Visitor groups */}
           <div className="flex flex-col gap-2">
             <div className="flex items-baseline justify-between">
-              <label className={labelClass}>Visitors per variant</label>
+              <label className={labelClass}>Visitors / sample size per variant</label>
               <p className="text-xs text-foreground/40">
-                {groups.length === 1 ? 'Same visitors for all metrics' : `${groups.length} groups`}
+                {groups.length === 1 ? 'Same for all metrics' : `${groups.length} groups`}
               </p>
             </div>
             <div className="flex flex-col gap-3">
@@ -300,7 +567,7 @@ export default function NewExperimentCsvPage() {
                         <input
                           type="number"
                           min="1"
-                          required
+                          required={group.metricIndices.length > 0}
                           placeholder="e.g. 10000"
                           value={group.visitors[vi] || ''}
                           onChange={e => updateGroupVisitor(gi, vi, Number(e.target.value))}
@@ -316,6 +583,7 @@ export default function NewExperimentCsvPage() {
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {parsed.rows.map((row, mi) => {
+                          if (row.type === 'no_test') return null
                           const isHere = group.metricIndices.includes(mi)
                           return (
                             <button
@@ -337,7 +605,7 @@ export default function NewExperimentCsvPage() {
                   )}
                 </div>
               ))}
-              {groups.length < parsed.rows.length && (
+              {groups.length < parsed.rows.filter(r => r.type !== 'no_test').length && (
                 <button
                   type="button"
                   onClick={addGroup}
@@ -353,7 +621,6 @@ export default function NewExperimentCsvPage() {
             <p className="text-sm text-red-500">{fieldErrors.visitors}</p>
           )}
 
-          {/* Confidence level */}
           <div className="flex flex-col gap-1">
             <label htmlFor="confidence_level" className={labelClass}>Confidence level (%)</label>
             <input
