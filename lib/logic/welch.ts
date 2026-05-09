@@ -103,7 +103,7 @@ function tInverseTwoTailed(alpha: number, df: number): number {
   return (lo + hi) / 2
 }
 
-type Sample = {
+export type ContinuousSample = {
   name: string
   mean: number
   std_dev: number
@@ -111,7 +111,7 @@ type Sample = {
   std_dev_estimated: boolean
 }
 
-function welchTest(control: Sample, challenger: Sample, alpha: number): ContinuousVariantResult {
+export function welchTest(control: ContinuousSample, challenger: ContinuousSample, alpha: number): ContinuousVariantResult {
   const m1 = control.mean
   const m2 = challenger.mean
   const v1 = control.std_dev * control.std_dev
@@ -152,7 +152,7 @@ function welchTest(control: Sample, challenger: Sample, alpha: number): Continuo
   }
 }
 
-function buildSample(name: string, mean: number, stdDev: number | null, n: number): Sample {
+export function buildContinuousSample(name: string, mean: number, stdDev: number | null, n: number): ContinuousSample {
   const estimated = stdDev === null
   const sd = estimated ? Math.sqrt(Math.max(mean, 0)) : (stdDev as number)
   return { name, mean, std_dev: sd, sample_size: n, std_dev_estimated: estimated }
@@ -165,7 +165,7 @@ export function calculateContinuousResults(
 ): ContinuousExperimentResult {
   const { variant_names, metric_values, N, std_dev } = properties
   const samples = variant_names.map((name, i) =>
-    buildSample(name, metric_values[i][0], std_dev?.[i]?.[0] ?? null, N[i][0])
+    buildContinuousSample(name, metric_values[i][0], std_dev?.[i]?.[0] ?? null, N[i][0])
   )
   const control = samples[0]
   const challengers = samples.slice(1)
