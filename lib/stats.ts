@@ -78,7 +78,7 @@ export function calculateMultipleMeasuresResults(
   properties: Properties,
   confidenceLevel: number
 ): MetricResult[] {
-  const { variant_names, metric_names, metric_types, metric_values, N, std_dev, visitor_group_labels } = properties
+  const { variant_names, metric_names, metric_types, metric_values, N, std_dev, visitor_group_labels, metric_tested } = properties
   const numMetrics = metric_names.length
   const numChallengers = Math.max(variant_names.length - 1, 1)
   const alpha = (1 - confidenceLevel) / numChallengers
@@ -87,6 +87,7 @@ export function calculateMultipleMeasuresResults(
   for (let m = 0; m < numMetrics; m++) {
     const kind = metric_types[m]
     const visitorGroupLabel = visitor_group_labels[m] ?? ''
+    const tested = metric_tested?.[m] !== false  // default true on legacy experiments
 
     if (kind === 'no_test') {
       const controlVal = metric_values[0][m]
@@ -102,33 +103,72 @@ export function calculateMultipleMeasuresResults(
         }),
       })
     } else if (kind === 'continuous') {
-      const samples = variant_names.map((name, i) =>
-        buildContinuousSample(name, metric_values[i][m], std_dev?.[i]?.[m] ?? null, N[i][m])
-      )
-      const control = samples[0]
-      results.push({
-        type: 'continuous',
-        metricName: metric_names[m],
-        visitorGroupLabel,
-        control: {
-          name: control.name,
-          mean: control.mean,
-          sample_size: control.sample_size,
-          std_dev_estimated: control.std_dev_estimated,
-        },
-        challengers: samples.slice(1).map(c => welchTest(control, c, alpha)),
-      })
+      if (!tested) {
+        const controlMean = metric_values[0][m]
+        results.push({
+          type: 'continuous',
+          tested: false,
+          metricName: metric_names[m],
+          visitorGroupLabel,
+          control: { name: variant_names[0], mean: controlMean, sample_size: 0, std_dev_estimated: false },
+          challengers: variant_names.slice(1).map((name, i) => {
+            const mean = metric_values[i + 1][m]
+            const uplift = controlMean === 0 ? 0 : ((mean - controlMean) / controlMean) * 100
+            return {
+              name, mean, sample_size: 0,
+              ci_lo: NaN, ci_hi: NaN, p_value: NaN,
+              is_significant: false, uplift, cohens_d: NaN,
+              std_dev_estimated: false,
+            }
+          }),
+        })
+      } else {
+        const samples = variant_names.map((name, i) =>
+          buildContinuousSample(name, metric_values[i][m], std_dev?.[i]?.[m] ?? null, N[i][m])
+        )
+        const control = samples[0]
+        results.push({
+          type: 'continuous',
+          tested: true,
+          metricName: metric_names[m],
+          visitorGroupLabel,
+          control: {
+            name: control.name,
+            mean: control.mean,
+            sample_size: control.sample_size,
+            std_dev_estimated: control.std_dev_estimated,
+          },
+          challengers: samples.slice(1).map(c => welchTest(control, c, alpha)),
+        })
+      }
     } else {
-      const samples = variant_names.map((name, i) => buildBinomialSample(name, metric_values[i][m], N[i][m]))
-      const control = samples[0]
-      const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
-      results.push({
-        type: 'binomial',
-        metricName: metric_names[m],
-        visitorGroupLabel,
-        control: { name: control.name, rate: controlRate },
-        challengers: samples.slice(1).map(c => zTest(control, c, alpha)),
-      })
+      if (!tested) {
+        const controlRate = metric_values[0][m]
+        results.push({
+          type: 'binomial',
+          tested: false,
+          metricName: metric_names[m],
+          visitorGroupLabel,
+          control: { name: variant_names[0], rate: controlRate },
+          challengers: variant_names.slice(1).map((name, i) => {
+            const rate = metric_values[i + 1][m]
+            const uplift = controlRate === 0 ? 0 : ((rate - controlRate) / controlRate) * 100
+            return { name, conversion_rate: rate, z_score: NaN, p_value: NaN, is_significant: false, uplift }
+          }),
+        })
+      } else {
+        const samples = variant_names.map((name, i) => buildBinomialSample(name, metric_values[i][m], N[i][m]))
+        const control = samples[0]
+        const controlRate = control.visitors > 0 ? control.conversions / control.visitors : 0
+        results.push({
+          type: 'binomial',
+          tested: true,
+          metricName: metric_names[m],
+          visitorGroupLabel,
+          control: { name: control.name, rate: controlRate },
+          challengers: samples.slice(1).map(c => zTest(control, c, alpha)),
+        })
+      }
     }
   }
   return results

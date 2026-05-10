@@ -93,7 +93,7 @@ export default async function ExperimentPage({
     const variantNames = props.variant_names
     const challengerNames = variantNames.slice(1)
     const testableResults = measureResults.filter(
-      (r): r is BinomialMetricResult | ContinuousMetricResult => r.type !== 'no_test'
+      (r): r is BinomialMetricResult | ContinuousMetricResult => r.type !== 'no_test' && r.tested
     )
     const significantPerVariant = challengerNames.map((name, i) => ({
       name,
@@ -104,6 +104,7 @@ export default async function ExperimentPage({
     const visitorGroups: { visitors: number[]; metricNames: string[]; label: string }[] = []
     for (let m = 0; m < props.metric_names.length; m++) {
       if (props.metric_types[m] === 'no_test') continue
+      if (props.metric_tested?.[m] === false) continue
       const visitors = variantNames.map((_, i) => props.N[i]?.[m] ?? 0)
       const label = props.visitor_group_labels[m] ?? ''
       const existing = visitorGroups.find(g => g.label === label && g.visitors.length === visitors.length && g.visitors.every((v, i) => v === visitors[i]))
@@ -193,12 +194,13 @@ export default async function ExperimentPage({
               </thead>
               <tbody>
                 {measureResults.map((r, i) => {
+                  const untested = r.type !== 'no_test' && !r.tested
                   const typeLabel =
-                    r.type === 'continuous' ? 'cont.' :
-                    r.type === 'no_test' ? 'no test' : 'binom.'
+                    r.type === 'no_test' || untested ? 'no test' :
+                    r.type === 'continuous' ? 'cont.' : 'binom.'
                   const typeColor =
-                    r.type === 'continuous' ? 'text-purple-500/70' :
-                    r.type === 'no_test' ? 'text-amber-600/80 dark:text-amber-500/80' : 'text-foreground/40'
+                    r.type === 'no_test' || untested ? 'text-amber-600/80 dark:text-amber-500/80' :
+                    r.type === 'continuous' ? 'text-purple-500/70' : 'text-foreground/40'
                   return (
                     <tr key={r.metricName} className={`border-b border-foreground/5 last:border-0 ${i % 2 === 0 ? '' : 'bg-foreground/[0.015]'}`}>
                       <td className="py-2.5 pr-6 font-medium whitespace-nowrap">
