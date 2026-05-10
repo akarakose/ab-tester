@@ -77,7 +77,7 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
     const variantNames = props.variant_names
     const challengerNames = variantNames.slice(1)
     const testableResults = measureResults.filter(
-      (r): r is BinomialMetricResult | ContinuousMetricResult => r.type !== 'no_test'
+      (r): r is BinomialMetricResult | ContinuousMetricResult => r.type !== 'no_test' && r.tested
     )
     const significantPerVariant = challengerNames.map((name, i) => ({
       name,

@@ -12,6 +12,9 @@ export type Properties = {
   std_dev: (number | null)[][] | null
   visitor_group_labels: string[]
   metric_formats?: string[]   // per-metric display format; absent on old experiments
+  visitor_source_metric?: (string | null)[]   // per-metric: name of no_test row supplying visitors (null = manual entry)
+  metric_tested?: boolean[]   // per-metric: false = skip the significance test (binomial/continuous only). Missing = treat as true.
+  sheet_source?: { url: string; gid: number }   // when imported from Google Sheets, the original URL + tab id (snapshot)
 }
 
 export type Experiment = {
@@ -61,6 +64,7 @@ export type ContinuousExperimentResult = {
 
 export type BinomialMetricResult = {
   type: 'binomial'
+  tested: boolean              // false = skipped test; challenger p_value/z_score are NaN
   metricName: string
   visitorGroupLabel: string
   control: { name: string; rate: number }
@@ -69,6 +73,7 @@ export type BinomialMetricResult = {
 
 export type ContinuousMetricResult = {
   type: 'continuous'
+  tested: boolean              // false = skipped test; challenger p_value/ci/cohen are NaN
   metricName: string
   visitorGroupLabel: string
   control: { name: string; mean: number; sample_size: number; std_dev_estimated: boolean }

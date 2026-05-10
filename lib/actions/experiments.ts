@@ -20,6 +20,20 @@ function sanitizeText(value: string): string {
   return value.replace(/<[^>]*>/g, '')
 }
 
+function sanitizeSheetSource(s: { url: string; gid: number } | undefined): { url: string; gid: number } | undefined {
+  if (!s) return undefined
+  if (typeof s.url !== 'string' || typeof s.gid !== 'number') return undefined
+  // Only allow Google Sheets URLs to avoid storing arbitrary content as a "source".
+  try {
+    const u = new URL(s.url)
+    if (u.hostname !== 'docs.google.com') return undefined
+  } catch {
+    return undefined
+  }
+  if (!Number.isInteger(s.gid) || s.gid < 0) return undefined
+  return { url: s.url, gid: s.gid }
+}
+
 function isNextInternalError(error: unknown): boolean {
   return ((error as { digest?: string })?.digest ?? '').startsWith('NEXT_')
 }
@@ -162,6 +176,7 @@ function validateMultipleMeasures(input: { variantNames: string[]; metrics: CsvM
   if (input.metrics.length === 0) return 'At least one metric is required.'
   if (input.metrics.length > MAX_METRICS) return `Maximum ${MAX_METRICS} metrics allowed.`
 
+  const byName = new Map(input.metrics.map(m => [m.name, m]))
   const numVariants = input.variantNames.length
   for (const m of input.metrics) {
     if (typeof m.name !== 'string') return 'Metric names must be strings.'
@@ -174,26 +189,46 @@ function validateMultipleMeasures(input: { variantNames: string[]; metrics: CsvM
 
     if (m.type === 'no_test') {
       if (m.values.some(v => !Number.isFinite(v))) return `Metric "${m.name}" values must be numbers.`
+      if (m.visitorSourceMetric !== undefined) return `Metric "${m.name}" is a no-test metric and cannot have a visitor source.`
+      if (m.tested !== undefined) return `Metric "${m.name}" is a no-test metric and cannot toggle the test flag.`
     } else {
       if (m.visitors.length !== numVariants) return `Metric "${m.name}" needs a visitor count for every variant.`
+      const tested = m.tested !== false
 
       if (m.type === 'binomial') {
         if (m.values.some(r => !Number.isFinite(r) || r < 0 || r > 100)) return `Metric "${m.name}" rates must be between 0 and 100.`
-        if (m.visitors.some(v => !Number.isFinite(v) || v <= 0 || !Number.isInteger(v))) return `Metric "${m.name}" visitor counts must be whole numbers greater than 0.`
+        if (tested && m.visitors.some(v => !Number.isFinite(v) || v <= 0 || !Number.isInteger(v))) return `Metric "${m.name}" visitor counts must be whole numbers greater than 0.`
       } else {
         if (m.values.some(v => !Number.isFinite(v) || v <= 0)) return `Metric "${m.name}" means must be positive numbers.`
-        if (m.visitors.some(v => !Number.isFinite(v) || v < 2 || !Number.isInteger(v))) return `Metric "${m.name}" sample sizes must be whole numbers of at least 2.`
+        if (tested && m.visitors.some(v => !Number.isFinite(v) || v < 2 || !Number.isInteger(v))) return `Metric "${m.name}" sample sizes must be whole numbers of at least 2.`
         if (m.std_devs !== undefined) {
           if (!Array.isArray(m.std_devs) || m.std_devs.length !== numVariants) return `Metric "${m.name}" std devs must be one per variant.`
           if (m.std_devs.some(s => s !== null && (!Number.isFinite(s) || (s as number) <= 0))) return `Metric "${m.name}" std devs must be greater than 0 when provided.`
         }
+      }
+
+      if (!tested && m.visitorSourceMetric !== undefined) return `Metric "${m.name}" cannot link a visitor source while skipping the test.`
+
+      if (m.visitorSourceMetric !== undefined) {
+        if (typeof m.visitorSourceMetric !== 'string') return `Metric "${m.name}" has an invalid visitor source.`
+        const source = byName.get(m.visitorSourceMetric)
+        if (!source) return `Metric "${m.name}" links to a missing visitor source "${m.visitorSourceMetric}".`
+        if (source.type !== 'no_test') return `Metric "${m.name}" links to "${source.name}" which is not a no-test metric.`
+        if (source.values.some(v => !Number.isFinite(v) || v <= 0 || !Number.isInteger(v)))
+          return `Visitor source "${source.name}" must have positive whole-number values for every variant.`
+        if (m.visitors.some((v, i) => v !== source.values[i]))
+          return `Metric "${m.name}" visitor counts do not match its source "${source.name}".`
       }
     }
   }
   return null
 }
 
-function buildMultipleMeasuresProperties(variantNames: string[], metrics: CsvMetricInput[]): Properties {
+function buildMultipleMeasuresProperties(
+  variantNames: string[],
+  metrics: CsvMetricInput[],
+  sheetSource?: { url: string; gid: number },
+): Properties {
   const numVariants = variantNames.length
   const numMetrics = metrics.length
 
@@ -205,9 +240,10 @@ function buildMultipleMeasuresProperties(variantNames: string[], metrics: CsvMet
     const metric = metrics[m]
     const isContinuous = metric.type === 'continuous'
     const isNoTest = metric.type === 'no_test'
+    const skipTest = metric.tested === false
     for (let v = 0; v < numVariants; v++) {
       metric_values[v][m] = isContinuous || isNoTest ? metric.values[v] : metric.values[v] / 100
-      N[v][m] = isNoTest ? 0 : metric.visitors[v]
+      N[v][m] = isNoTest || skipTest ? 0 : metric.visitors[v]
       if (isContinuous) {
         const sd = metric.std_devs?.[v]
         std_dev_grid[v][m] = typeof sd === 'number' && Number.isFinite(sd) && sd > 0 ? sd : null
@@ -227,6 +263,9 @@ function buildMultipleMeasuresProperties(variantNames: string[], metrics: CsvMet
     std_dev: hasAnyContinuous ? std_dev_grid : null,
     visitor_group_labels: metrics.map(m => m.visitorGroupLabel ?? ''),
     metric_formats: metrics.map(m => m.format ?? 'decimal'),
+    visitor_source_metric: metrics.map(m => m.visitorSourceMetric ?? null),
+    metric_tested: metrics.map(m => m.type === 'no_test' ? false : m.tested !== false),
+    ...(sheetSource ? { sheet_source: sheetSource } : {}),
   }
 }
 
@@ -392,8 +431,11 @@ export async function createExperimentsFromCsv(
       ...(m.std_devs !== undefined ? { std_devs: m.std_devs } : {}),
       ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
       ...(m.format ? { format: m.format } : {}),
+      ...(m.visitorSourceMetric ? { visitorSourceMetric: sanitizeText(m.visitorSourceMetric) } : {}),
+      ...(m.tested === false ? { tested: false } : {}),
     }))
     const { confidenceLevel } = input
+    const sheetSource = sanitizeSheetSource(input.sheetSource)
 
     const baseError = validateCommonFields({ name: experimentName, confidence: confidenceLevel })
     if (baseError) return { error: baseError }
@@ -401,7 +443,7 @@ export async function createExperimentsFromCsv(
     const csvError = validateMultipleMeasures({ variantNames, metrics })
     if (csvError) return { error: csvError }
 
-    const properties = buildMultipleMeasuresProperties(variantNames, metrics)
+    const properties = buildMultipleMeasuresProperties(variantNames, metrics, sheetSource)
 
     const { data: inserted, error } = await supabase
       .from('experiments')
@@ -442,8 +484,11 @@ export async function updateCsvExperiment(
       ...(m.std_devs !== undefined ? { std_devs: m.std_devs } : {}),
       ...(m.visitorGroupLabel ? { visitorGroupLabel: sanitizeText(m.visitorGroupLabel) } : {}),
       ...(m.format ? { format: m.format } : {}),
+      ...(m.visitorSourceMetric ? { visitorSourceMetric: sanitizeText(m.visitorSourceMetric) } : {}),
+      ...(m.tested === false ? { tested: false } : {}),
     }))
     const { status, confidenceLevel } = input
+    const sheetSource = sanitizeSheetSource(input.sheetSource)
 
     const baseError = validateCommonFields({ name, confidence: confidenceLevel, status })
     if (baseError) return { error: baseError }
@@ -451,7 +496,7 @@ export async function updateCsvExperiment(
     const csvError = validateMultipleMeasures({ variantNames, metrics })
     if (csvError) return { error: csvError }
 
-    const properties = buildMultipleMeasuresProperties(variantNames, metrics)
+    const properties = buildMultipleMeasuresProperties(variantNames, metrics, sheetSource)
 
     const { error } = await supabase
       .from('experiments')

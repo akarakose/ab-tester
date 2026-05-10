@@ -1,8 +1,9 @@
 'use client'
 
-import { Fragment, useState, useRef, useTransition } from 'react'
+import { Fragment, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { createExperimentsFromCsv } from '@/lib/actions/experiments'
+import { fetchGoogleSheet } from '@/lib/actions/sheets'
 import type { CsvMetricInput } from '@/lib/actions/experiments.types'
 import SubmitButton from '@/components/ui/SubmitButton'
 import MetricMultiSelect from '@/components/ui/MetricMultiSelect'
@@ -16,57 +17,58 @@ const labelClass = 'text-sm font-medium'
 
 type VisitorGroup = { visitors: number[]; metricIndices: number[]; label: string; sourceMetricIndex: number | null }
 
-export default function NewExperimentCsvPage() {
-  const fileRef = useRef<HTMLInputElement>(null)
-  const [isDragging, setIsDragging] = useState(false)
+export default function NewExperimentSheetsPage() {
+  const [url, setUrl] = useState('')
+  const [gidOverride, setGidOverride] = useState<string>('')
+  const [showGidEditor, setShowGidEditor] = useState(false)
   const [parsed, setParsed] = useState<ParsedCsv | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; confidence_level?: string; visitors?: string; metrics?: string }>({})
-
-  const [groups, setGroups] = useState<VisitorGroup[]>([])
-  // Per-metric std_dev grid: stdDevs[metricIdx][variantIdx] — null = Poisson
-  const [stdDevs, setStdDevs] = useState<(string)[][]>([])
-  // Per-metric expansion of std_dev row
-  const [showStdDev, setShowStdDev] = useState<boolean[]>([])
+  const [sheetSource, setSheetSource] = useState<{ url: string; gid: number } | null>(null)
+  const [isFetching, startFetchTransition] = useTransition()
   const [isPending, startTransition] = useTransition()
 
-  const handleFile = (file: File) => {
-    if (!file.name.endsWith('.csv')) {
-      setParseError('Please upload a .csv file.')
+  const [groups, setGroups] = useState<VisitorGroup[]>([])
+  const [stdDevs, setStdDevs] = useState<(string)[][]>([])
+  const [showStdDev, setShowStdDev] = useState<boolean[]>([])
+
+  const handleConnect = () => {
+    setParseError(null)
+    const overrideGid = gidOverride.trim() === '' ? undefined : Number(gidOverride.trim())
+    if (overrideGid !== undefined && (!Number.isInteger(overrideGid) || overrideGid < 0)) {
+      setParseError('Tab id must be a non-negative integer.')
       return
     }
-    const reader = new FileReader()
-    reader.onload = e => {
-      const text = e.target?.result as string
-      const result = parseCsv(text)
+    startFetchTransition(async () => {
+      const res = await fetchGoogleSheet({ url, gid: overrideGid })
+      if (!res.ok) {
+        setParseError(res.error)
+        return
+      }
+      const result = parseCsv(res.csv)
       if (typeof result === 'string') {
         setParseError(result)
-        setParsed(null)
-        setGroups([])
-        setStdDevs([])
-        setShowStdDev([])
-      } else {
-        setParsed(result)
-        setGroups([{
-          visitors: result.variantNames.map(() => 0),
-          metricIndices: result.rows.map((_, i) => i).filter(i => result.rows[i].type !== 'no_test'),
-          label: '',
-          sourceMetricIndex: null,
-        }])
-        setStdDevs(result.rows.map(() => result.variantNames.map(() => '')))
-        setShowStdDev(result.rows.map(() => false))
-        setParseError(null)
-        setSubmitError(null)
+        return
       }
-    }
-    reader.readAsText(file)
+      setParsed(result)
+      setSheetSource({ url, gid: res.gid })
+      setGroups([{
+        visitors: result.variantNames.map(() => 0),
+        metricIndices: result.rows.map((_, i) => i).filter(i => result.rows[i].type !== 'no_test'),
+        label: '',
+        sourceMetricIndex: null,
+      }])
+      setStdDevs(result.rows.map(() => result.variantNames.map(() => '')))
+      setShowStdDev(result.rows.map(() => false))
+      setSubmitError(null)
+    })
   }
 
   const setMetricType = (mi: number, type: MetricKind) => {
     if (!parsed) return
     const row = parsed.rows[mi]
-    if (row.forcedContinuous && type === 'binomial') return  // can't downgrade if values are out of [0,100]
+    if (row.forcedContinuous && type === 'binomial') return
     const wasNoTest = row.type === 'no_test'
     const isNoTest = type === 'no_test'
     setParsed({
@@ -78,7 +80,6 @@ export default function NewExperimentCsvPage() {
         if (isNoTest) {
           return { ...g, metricIndices: g.metricIndices.filter(m => m !== mi) }
         }
-        // Row left no_test: any group that was sourcing visitors from it loses the link.
         const next = g.sourceMetricIndex === mi ? { ...g, sourceMetricIndex: null } : g
         if (gi === 0) {
           return { ...next, metricIndices: Array.from(new Set([...next.metricIndices, mi])).sort((a, b) => a - b) }
@@ -114,8 +115,6 @@ export default function NewExperimentCsvPage() {
   const updateGroupLabel = (gi: number, value: string) =>
     setGroups(prev => prev.map((g, idx) => idx === gi ? { ...g, label: value } : g))
 
-  // Checked = assigned to this group (and not skipping test).
-  // Unchecked = removed from this group; if it was the only group, becomes skip-test.
   const setMetricCheckedForGroup = (metricIdx: number, targetGi: number, checked: boolean) => {
     if (!parsed) return
     setParsed({
@@ -154,7 +153,6 @@ export default function NewExperimentCsvPage() {
     if (!parsed || visibleIds.length === 0) return
     const target = groups[targetGi]
     if (!target) return
-    // Only metrics actually in this group should be removed from it (and marked skip-test).
     const idsInThisGroup = visibleIds.filter(id => target.metricIndices.includes(id))
     if (idsInThisGroup.length === 0) return
     setParsed({
@@ -166,7 +164,6 @@ export default function NewExperimentCsvPage() {
       : g))
   }
 
-  // Skip test = remove the row from every group; the user opts out of running a significance test.
   const toggleSkipTest = (mi: number) => {
     if (!parsed) return
     const row = parsed.rows[mi]
@@ -178,7 +175,6 @@ export default function NewExperimentCsvPage() {
     })
     setGroups(prev => prev.map((g, gi) => {
       if (next) return { ...g, metricIndices: g.metricIndices.filter(m => m !== mi) }
-      // Re-enable test → put the metric back into the first group.
       return gi === 0
         ? { ...g, metricIndices: Array.from(new Set([...g.metricIndices, mi])).sort((a, b) => a - b) }
         : g
@@ -202,16 +198,18 @@ export default function NewExperimentCsvPage() {
       return next
     })
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFile(file)
+  const handleReset = () => {
+    setParsed(null)
+    setSheetSource(null)
+    setParseError(null)
+    setGroups([])
+    setStdDevs([])
+    setShowStdDev([])
   }
 
   const handleSubmit = (e: { preventDefault(): void; currentTarget: HTMLFormElement }) => {
     e.preventDefault()
-    if (!parsed) return
+    if (!parsed || !sheetSource) return
 
     const form = e.currentTarget
     const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim()
@@ -224,7 +222,6 @@ export default function NewExperimentCsvPage() {
     const activeGroups = groups.filter(g => g.metricIndices.length > 0)
     if (activeGroups.some(g => g.visitors.some(v => !v || v <= 0))) errors.visitors = 'All visitor counts must be greater than 0.'
 
-    // Per-metric validation
     for (let mi = 0; mi < parsed.rows.length; mi++) {
       const row = parsed.rows[mi]
       if (row.type === 'binomial' && row.values.some(v => v < 0 || v > 100)) {
@@ -303,9 +300,9 @@ export default function NewExperimentCsvPage() {
         variantNames: parsed.variantNames,
         metrics: metrics as CsvMetricInput[],
         confidenceLevel: confidence,
+        sheetSource,
       })
       if (result?.error) setSubmitError(result.error)
-      // On success the server action redirects to the new experiment's detail page.
     })
   }
 
@@ -315,41 +312,61 @@ export default function NewExperimentCsvPage() {
         <Link href="/dashboard/experiments/new" className="text-sm text-foreground/50 hover:text-foreground transition-colors">
           ← Back
         </Link>
-        <h1 className="text-xl font-bold mt-3">Upload CSV</h1>
-        <p className="text-sm text-foreground/50 mt-1">Import experiment results from a spreadsheet.</p>
+        <h1 className="text-xl font-bold mt-3">Connect Google Sheet</h1>
+        <p className="text-sm text-foreground/50 mt-1">Paste the share link of a Google Sheet (set to &quot;Anyone with the link can view&quot;).</p>
       </div>
 
       {!parsed ? (
         <>
-          <div
-            onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-            onClick={() => fileRef.current?.click()}
-            className={`flex flex-col items-center justify-center gap-3 border-2 border-dashed rounded-xl p-14 cursor-pointer transition-colors ${
-              isDragging ? 'border-brand bg-brand/5' : 'border-foreground/20 hover:border-foreground/35 hover:bg-foreground/3'
-            }`}
-          >
-            <svg className="w-8 h-8 text-foreground/30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-            </svg>
-            <div className="text-center">
-              <p className="text-sm font-medium">Drop your CSV here</p>
-              <p className="text-xs text-foreground/45 mt-0.5">or click to browse</p>
-            </div>
+          <div className="flex flex-col gap-3 border border-foreground/15 rounded-xl p-5">
+            <label htmlFor="sheet_url" className={labelClass}>Sheet URL</label>
             <input
-              ref={fileRef}
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])}
+              id="sheet_url"
+              type="url"
+              placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0"
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              className={inputClass}
             />
+            <button
+              type="button"
+              onClick={() => setShowGidEditor(v => !v)}
+              className="text-xs text-foreground/50 hover:text-foreground/70 transition-colors text-left"
+            >
+              {showGidEditor ? '− Use the tab from the URL' : '+ Pick a different tab'}
+            </button>
+            {showGidEditor && (
+              <div className="flex flex-col gap-1">
+                <label htmlFor="sheet_gid" className="text-xs text-foreground/50">Tab id (gid)</label>
+                <input
+                  id="sheet_gid"
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="leave blank to use the URL"
+                  value={gidOverride}
+                  onChange={e => setGidOverride(e.target.value)}
+                  className={inputClass}
+                />
+                <p className="text-xs text-foreground/40 mt-0.5">
+                  Find a tab&apos;s id in its URL: <span className="font-mono">…#gid=&lt;number&gt;</span>.
+                </p>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleConnect}
+              disabled={isFetching || !url.trim()}
+              className="mt-2 self-start rounded-lg bg-brand text-white text-sm font-medium px-4 py-2 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+            >
+              {isFetching ? 'Fetching…' : 'Connect sheet'}
+            </button>
           </div>
 
           <div className="mt-4 rounded-lg border border-foreground/10 p-4" style={{ backgroundColor: 'color-mix(in srgb, var(--foreground) 3%, var(--background))' }}>
-            <p className="text-xs font-medium text-foreground/50 mb-2">Expected format</p>
+            <p className="text-xs font-medium text-foreground/50 mb-2">Expected layout</p>
             <pre className="text-xs text-foreground/60 font-mono leading-relaxed">{`measure_name,variant_a,variant_b\nConversion Rate,5.20,6.10\nRevenue per User,1.32,1.97`}</pre>
-            <p className="text-xs text-foreground/40 mt-2">Each row will be auto-classified as a conversion rate (0–100%) or continuous metric. Visitor counts and std devs are entered after uploading.</p>
+            <p className="text-xs text-foreground/40 mt-2">First column is the metric name. The data is imported once as a snapshot — re-pull from the experiment&apos;s edit page later to refresh.</p>
           </div>
 
           {parseError && <p className="mt-3 text-sm text-red-500">{parseError}</p>}
@@ -357,14 +374,21 @@ export default function NewExperimentCsvPage() {
       ) : (
         <form onSubmit={handleSubmit} className="flex flex-col gap-6">
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium">{parsed.rows.length} metric{parsed.rows.length !== 1 ? 's' : ''} detected</p>
+            <div className="flex items-center justify-between mb-2 gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{parsed.rows.length} metric{parsed.rows.length !== 1 ? 's' : ''} detected</p>
+                {sheetSource && (
+                  <p className="text-xs text-foreground/45 truncate">
+                    From <a href={sheetSource.url} target="_blank" rel="noopener noreferrer" className="hover:text-foreground/70 underline decoration-dotted">sheet</a> · tab gid {sheetSource.gid}
+                  </p>
+                )}
+              </div>
               <button
                 type="button"
-                onClick={() => { setParsed(null); setParseError(null); setGroups([]); setStdDevs([]); setShowStdDev([]) }}
-                className="text-xs text-foreground/40 hover:text-foreground transition-colors"
+                onClick={handleReset}
+                className="text-xs text-foreground/40 hover:text-foreground transition-colors shrink-0"
               >
-                Upload different file
+                Connect different sheet
               </button>
             </div>
             <div className="overflow-x-auto rounded-xl border border-foreground/10">
