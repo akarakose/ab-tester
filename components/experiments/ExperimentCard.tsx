@@ -122,7 +122,7 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
             <tbody>
               {displayedResults.map((r, i) => (
                 <tr key={r.metricName} className="border-b border-foreground/5 last:border-0">
-                  <td className="py-1 pr-4 font-medium truncate max-w-[110px]">{r.metricName}</td>
+                  <td className="py-1 pr-4 font-medium truncate max-w-[110px] sm:max-w-[180px]">{r.metricName}</td>
                   <td className="py-1 px-2 text-right text-foreground/60">
                     {r.type === 'continuous'
                       ? fmtValue(r.control.mean, props.metric_formats?.[i])

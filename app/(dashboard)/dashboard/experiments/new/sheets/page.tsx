@@ -579,7 +579,7 @@ export default function NewExperimentSheetsPage() {
                   <div className="flex flex-col gap-2">
                     {parsed.variantNames.map((vName, vi) => (
                       <div key={vi} className="flex items-center gap-3">
-                        <span className="text-sm text-foreground/60 w-32 shrink-0 truncate">{vName}</span>
+                        <span className="text-sm text-foreground/60 w-20 sm:w-32 shrink-0 truncate">{vName}</span>
                         <input
                           type="number"
                           min="1"

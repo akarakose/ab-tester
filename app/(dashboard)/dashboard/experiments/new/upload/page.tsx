@@ -16,10 +16,13 @@ const labelClass = 'text-sm font-medium'
 
 type VisitorGroup = { visitors: number[]; metricIndices: number[]; label: string; sourceMetricIndex: number | null }
 
-export default function NewExperimentCsvPage() {
+export default function NewExperimentUploadPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [parsed, setParsed] = useState<ParsedCsv | null>(null)
+  // Set when the user drops an .xlsx workbook with more than one sheet; the closure
+  // captures the parsed workbook so picking a sheet doesn't re-read the file.
+  const [pendingXlsx, setPendingXlsx] = useState<{ fileName: string; sheetNames: string[]; toCsv: (sheetName: string) => string } | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; confidence_level?: string; visitors?: string; metrics?: string }>({})
@@ -31,36 +34,73 @@ export default function NewExperimentCsvPage() {
   const [showStdDev, setShowStdDev] = useState<boolean[]>([])
   const [isPending, startTransition] = useTransition()
 
-  const handleFile = (file: File) => {
-    if (!file.name.endsWith('.csv')) {
-      setParseError('Please upload a .csv file.')
+  const ingestCsvText = (text: string) => {
+    const result = parseCsv(text)
+    if (typeof result === 'string') {
+      setParseError(result)
+      setParsed(null)
+      setGroups([])
+      setStdDevs([])
+      setShowStdDev([])
       return
     }
-    const reader = new FileReader()
-    reader.onload = e => {
-      const text = e.target?.result as string
-      const result = parseCsv(text)
-      if (typeof result === 'string') {
-        setParseError(result)
-        setParsed(null)
-        setGroups([])
-        setStdDevs([])
-        setShowStdDev([])
-      } else {
-        setParsed(result)
-        setGroups([{
-          visitors: result.variantNames.map(() => 0),
-          metricIndices: result.rows.map((_, i) => i).filter(i => result.rows[i].type !== 'no_test'),
-          label: '',
-          sourceMetricIndex: null,
-        }])
-        setStdDevs(result.rows.map(() => result.variantNames.map(() => '')))
-        setShowStdDev(result.rows.map(() => false))
-        setParseError(null)
-        setSubmitError(null)
-      }
+    setParsed(result)
+    setGroups([{
+      visitors: result.variantNames.map(() => 0),
+      metricIndices: result.rows.map((_, i) => i).filter(i => result.rows[i].type !== 'no_test'),
+      label: '',
+      sourceMetricIndex: null,
+    }])
+    setStdDevs(result.rows.map(() => result.variantNames.map(() => '')))
+    setShowStdDev(result.rows.map(() => false))
+    setParseError(null)
+    setSubmitError(null)
+  }
+
+  const handleFile = async (file: File) => {
+    setPendingXlsx(null)
+    const ext = file.name.toLowerCase().split('.').pop() ?? ''
+
+    if (ext === 'csv') {
+      const reader = new FileReader()
+      reader.onload = e => ingestCsvText(e.target?.result as string)
+      reader.readAsText(file)
+      return
     }
-    reader.readAsText(file)
+
+    if (ext === 'xlsx' || ext === 'xls') {
+      try {
+        const buffer = await file.arrayBuffer()
+        // Lazy-loaded so the CSV-only path doesn't pay the ~500KB bundle cost up front.
+        const XLSX = await import('xlsx')
+        const wb = XLSX.read(buffer, { type: 'array' })
+        if (!wb.SheetNames || wb.SheetNames.length === 0) {
+          setParseError('Workbook has no sheets.')
+          return
+        }
+        // sheet_to_csv with default options uses each cell's formatted display text, which
+        // is what our format detection (%, currency, EU vs US decimals) reads from.
+        const toCsv = (sheetName: string) => XLSX.utils.sheet_to_csv(wb.Sheets[sheetName])
+        if (wb.SheetNames.length === 1) {
+          ingestCsvText(toCsv(wb.SheetNames[0]))
+        } else {
+          setPendingXlsx({ fileName: file.name, sheetNames: wb.SheetNames, toCsv })
+          setParseError(null)
+        }
+      } catch {
+        setParseError('Could not read this Excel file. It may be corrupted or password-protected.')
+      }
+      return
+    }
+
+    setParseError('Please upload a .csv or .xlsx file.')
+  }
+
+  const pickSheet = (sheetName: string) => {
+    if (!pendingXlsx) return
+    const csv = pendingXlsx.toCsv(sheetName)
+    setPendingXlsx(null)
+    ingestCsvText(csv)
   }
 
   const setMetricType = (mi: number, type: MetricKind) => {
@@ -315,11 +355,38 @@ export default function NewExperimentCsvPage() {
         <Link href="/dashboard/experiments/new" className="text-sm text-foreground/50 hover:text-foreground transition-colors">
           ← Back
         </Link>
-        <h1 className="text-xl font-bold mt-3">Upload CSV</h1>
-        <p className="text-sm text-foreground/50 mt-1">Import experiment results from a spreadsheet.</p>
+        <h1 className="text-xl font-bold mt-3">Upload file</h1>
+        <p className="text-sm text-foreground/50 mt-1">Import experiment results from a CSV or Excel file.</p>
       </div>
 
-      {!parsed ? (
+      {pendingXlsx ? (
+        <div className="border border-foreground/15 rounded-xl p-5 flex flex-col gap-3">
+          <div>
+            <p className="text-sm font-medium">Pick a sheet</p>
+            <p className="text-xs text-foreground/50 mt-0.5 truncate">{pendingXlsx.fileName} has {pendingXlsx.sheetNames.length} sheets.</p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {pendingXlsx.sheetNames.map(name => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => pickSheet(name)}
+                className="text-left text-sm px-3 py-2 rounded-md border border-foreground/15 hover:border-brand/50 hover:bg-brand/5 transition-colors"
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => { setPendingXlsx(null); setParseError(null) }}
+            className="text-xs text-foreground/40 hover:text-foreground transition-colors self-start"
+          >
+            Cancel
+          </button>
+          {parseError && <p className="text-sm text-red-500">{parseError}</p>}
+        </div>
+      ) : !parsed ? (
         <>
           <div
             onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
@@ -334,22 +401,22 @@ export default function NewExperimentCsvPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
             </svg>
             <div className="text-center">
-              <p className="text-sm font-medium">Drop your CSV here</p>
-              <p className="text-xs text-foreground/45 mt-0.5">or click to browse</p>
+              <p className="text-sm font-medium">Drop your file here</p>
+              <p className="text-xs text-foreground/45 mt-0.5">.csv or .xlsx — or click to browse</p>
             </div>
             <input
               ref={fileRef}
               type="file"
-              accept=".csv"
+              accept=".csv,.xlsx,.xls"
               className="hidden"
               onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])}
             />
           </div>
 
           <div className="mt-4 rounded-lg border border-foreground/10 p-4" style={{ backgroundColor: 'color-mix(in srgb, var(--foreground) 3%, var(--background))' }}>
-            <p className="text-xs font-medium text-foreground/50 mb-2">Expected format</p>
+            <p className="text-xs font-medium text-foreground/50 mb-2">Expected layout</p>
             <pre className="text-xs text-foreground/60 font-mono leading-relaxed">{`measure_name,variant_a,variant_b\nConversion Rate,5.20,6.10\nRevenue per User,1.32,1.97`}</pre>
-            <p className="text-xs text-foreground/40 mt-2">Each row will be auto-classified as a conversion rate (0–100%) or continuous metric. Visitor counts and std devs are entered after uploading.</p>
+            <p className="text-xs text-foreground/40 mt-2">First column is the metric name. Excel files with more than one sheet will let you pick which sheet to import.</p>
           </div>
 
           {parseError && <p className="mt-3 text-sm text-red-500">{parseError}</p>}
@@ -555,7 +622,7 @@ export default function NewExperimentCsvPage() {
                   <div className="flex flex-col gap-2">
                     {parsed.variantNames.map((vName, vi) => (
                       <div key={vi} className="flex items-center gap-3">
-                        <span className="text-sm text-foreground/60 w-32 shrink-0 truncate">{vName}</span>
+                        <span className="text-sm text-foreground/60 w-20 sm:w-32 shrink-0 truncate">{vName}</span>
                         <input
                           type="number"
                           min="1"

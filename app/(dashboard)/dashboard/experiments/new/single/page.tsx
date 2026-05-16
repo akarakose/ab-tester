@@ -141,7 +141,7 @@ export default function NewExperimentPage() {
                 )}
               </div>
               {metricType === 'binomial' ? (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1">
                     <label className={labelClass}>Visitors</label>
                     <input
@@ -220,7 +220,7 @@ export default function NewExperimentPage() {
 function ContinuousVariantFields({ index }: { index: number }) {
   const [stdDev, setStdDev] = useState('')
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
       <div className="flex flex-col gap-1">
         <label className={labelClass}>Mean</label>
         <input
