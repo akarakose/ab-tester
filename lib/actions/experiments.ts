@@ -550,6 +550,62 @@ export async function restoreExperiment(id: string): Promise<{ error: string } |
   }
 }
 
+export async function bulkArchiveExperiments(ids: string[]): Promise<{ error?: string; count?: number }> {
+  try {
+    if (ids.length === 0) return { count: 0 }
+    const { supabase } = await getAuthenticatedUser()
+    const { error, count } = await supabase
+      .from('experiments')
+      .update({ deleted_at: new Date().toISOString() }, { count: 'exact' })
+      .in('id', ids)
+      .is('deleted_at', null)
+    if (error) return { error: error.message }
+    revalidateExperimentPaths()
+    return { count: count ?? 0 }
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
+}
+
+export async function bulkRestoreExperiments(ids: string[]): Promise<{ error?: string; count?: number }> {
+  try {
+    if (ids.length === 0) return { count: 0 }
+    const { supabase } = await getAuthenticatedUser()
+    const { error, count } = await supabase
+      .from('experiments')
+      .update({ deleted_at: null }, { count: 'exact' })
+      .in('id', ids)
+      .not('deleted_at', 'is', null)
+    if (error) return { error: error.message }
+    revalidateExperimentPaths()
+    return { count: count ?? 0 }
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
+}
+
+export async function bulkPermanentlyDeleteExperiments(ids: string[]): Promise<{ error?: string; count?: number }> {
+  try {
+    if (ids.length === 0) return { count: 0 }
+    const { supabase } = await getAuthenticatedUser()
+    const { error, count } = await supabase
+      .from('experiments')
+      .delete({ count: 'exact' })
+      .in('id', ids)
+    if (error) return { error: error.message }
+    revalidateExperimentPaths()
+    return { count: count ?? 0 }
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
+}
+
 export async function permanentlyDeleteExperiment(
   id: string,
   fromArchived: boolean = false,

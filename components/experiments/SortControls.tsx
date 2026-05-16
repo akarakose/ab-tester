@@ -5,10 +5,10 @@ import { useTransition } from 'react'
 import type { SortField, SortOrder } from '@/lib/actions/experiments.types'
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
-  { value: 'created_at', label: 'Date created' },
-  { value: 'updated_at', label: 'Last updated' },
-  { value: 'name', label: 'Name' },
-  { value: 'status', label: 'Status' },
+  { value: 'created_at', label: 'Sort by created' },
+  { value: 'updated_at', label: 'Sort by updated' },
+  { value: 'name', label: 'Sort by name' },
+  { value: 'status', label: 'Sort by status' },
 ]
 
 export default function SortControls({
@@ -35,7 +35,6 @@ export default function SortControls({
 
   return (
     <div className={`flex items-center gap-2 transition-opacity ${isPending ? 'opacity-60' : ''}`}>
-      <span className="text-sm text-foreground/50">Sort</span>
       <select
         value={sortBy}
         onChange={e => update(e.target.value as SortField, sortOrder)}

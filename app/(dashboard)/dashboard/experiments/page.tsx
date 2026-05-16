@@ -2,13 +2,8 @@ import type { Metadata } from 'next'
 import { getExperiments } from '@/lib/actions/experiments'
 import type { SortField, SortOrder, ExperimentFilters } from '@/lib/actions/experiments.types'
 import Link from 'next/link'
-import { Suspense } from 'react'
-import ExperimentCard from '@/components/experiments/ExperimentCard'
-import ExperimentTile from '@/components/experiments/ExperimentTile'
-import ExperimentListRow from '@/components/experiments/ExperimentListRow'
-import SortControls from '@/components/experiments/SortControls'
-import FilterControls from '@/components/experiments/FilterControls'
-import ViewToggle, { type ExperimentView } from '@/components/experiments/ViewToggle'
+import ExperimentsList from '@/components/experiments/ExperimentsList'
+import type { ExperimentView } from '@/components/experiments/ViewToggle'
 
 export const metadata: Metadata = {
   title: 'Experiments',
@@ -126,43 +121,13 @@ export default async function ExperimentsPage({
           </div>
         )
       ) : (
-        <>
-          <Suspense fallback={null}>
-            <FilterControls
-              rightSlot={
-                <div className="flex items-center gap-2">
-                  <ViewToggle view={view} />
-                  <SortControls sortBy={sortBy} sortOrder={sortOrder} />
-                </div>
-              }
-            />
-          </Suspense>
-
-          {experiments.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 border border-dashed border-foreground/20 rounded-xl text-center px-6">
-              <p className="font-semibold text-foreground">No results</p>
-              <p className="text-sm text-foreground/50 mt-1">No experiments match your current filters.</p>
-            </div>
-          ) : view === 'list' ? (
-            <div className="border border-foreground/10 rounded-xl divide-y divide-foreground/8 overflow-hidden">
-              {experiments.map(exp => (
-                <ExperimentListRow key={exp.id} experiment={exp} />
-              ))}
-            </div>
-          ) : view === 'tile' ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {experiments.map(exp => (
-                <ExperimentTile key={exp.id} experiment={exp} />
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {experiments.map(exp => (
-                <ExperimentCard key={exp.id} experiment={exp} />
-              ))}
-            </div>
-          )}
-        </>
+        <ExperimentsList
+          experiments={experiments}
+          view={view}
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          archived={archived}
+        />
       )}
     </div>
   )
