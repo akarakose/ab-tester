@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useState, useEffect } from 'react'
+import { useActionState, useState } from 'react'
 import { updateEmail } from '@/lib/actions/account'
 import Spinner from '@/components/ui/Spinner'
 
@@ -11,10 +11,14 @@ export default function EmailEditor({ currentEmail }: { currentEmail: string }) 
   const [state, formAction, pending] = useActionState(updateEmail, undefined)
 
   // Collapse the editor once Supabase confirms the change was queued; the success
-  // message stays visible in the read view until the user navigates away.
-  useEffect(() => {
+  // message stays visible in the read view until the user navigates away. Track
+  // the previous message so the collapse only fires on transition — React 19's
+  // set-state-in-effect rule disallows the useEffect form of this.
+  const [prevMessage, setPrevMessage] = useState<string | undefined>(undefined)
+  if (state?.message !== prevMessage) {
+    setPrevMessage(state?.message)
     if (state?.message) setEditing(false)
-  }, [state?.message])
+  }
 
   if (!editing) {
     return (

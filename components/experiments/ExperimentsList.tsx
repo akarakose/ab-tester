@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState, useTransition } from 'react'
+import { Suspense, useState, useTransition } from 'react'
 import type { Experiment } from '@/types/experiment'
 import type { SortField, SortOrder } from '@/lib/actions/experiments.types'
 import {
@@ -48,9 +48,13 @@ export default function ExperimentsList({ experiments, view, sortBy, sortOrder, 
 
   // Switching between Active and Archived tabs invalidates any in-flight selection
   // (those IDs only exist in the previous tab), so drop the selection wholesale.
-  useEffect(() => {
+  // React 19's set-state-in-effect rule disallows useEffect for this; compare the
+  // previous prop in render instead.
+  const [prevArchived, setPrevArchived] = useState(archived)
+  if (archived !== prevArchived) {
+    setPrevArchived(archived)
     exitSelectMode()
-  }, [archived])
+  }
 
   const toggleOne = (id: string) => {
     setSelected(prev => {
