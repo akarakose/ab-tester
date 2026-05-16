@@ -18,7 +18,7 @@ export default function NewExperimentTypePage() {
 
       <div className="flex flex-col gap-3">
         <Link
-          href="/dashboard/experiments/new/csv"
+          href="/dashboard/experiments/new/upload"
           className="group flex items-start gap-4 border border-foreground/15 rounded-xl p-5 hover:border-brand/50 hover:bg-brand/5 transition-colors"
         >
           <div className="mt-0.5 w-9 h-9 rounded-lg bg-foreground/8 flex items-center justify-center shrink-0 group-hover:bg-brand/10 transition-colors">
@@ -27,8 +27,8 @@ export default function NewExperimentTypePage() {
             </svg>
           </div>
           <div>
-            <p className="font-medium text-sm">Upload CSV</p>
-            <p className="text-sm text-foreground/50 mt-0.5">Import experiment data from a spreadsheet or analytics export.</p>
+            <p className="font-medium text-sm">Upload file</p>
+            <p className="text-sm text-foreground/50 mt-0.5">Import experiment data from a CSV or Excel file.</p>
           </div>
         </Link>
 

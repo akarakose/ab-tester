@@ -39,3 +39,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# IDE / editor
+/.idea
+/.vscode
+
+# OS
+Thumbs.db
+
+# Local Claude / MCP / agent skill setup (per-developer, not project state)
+/.mcp.json
+/.claude
+/.agents
+/skills-lock.json
+
+# Local mock data / fixtures
+/data

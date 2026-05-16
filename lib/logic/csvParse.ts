@@ -101,10 +101,12 @@ export function parseCsv(text: string): ParsedCsv | string {
     dataRows.push({ lineIndex: i, metric, rawValues: cols.slice(1, variantNames.length + 1) })
   }
 
-  const format = detectDecimalFormat(dataRows.flatMap(r => r.rawValues))
-
   const rows: ParsedRow[] = []
   for (const { lineIndex: i, metric, rawValues } of dataRows) {
+    // Per-row format detection — a CSV exported from Excel can mix US-decimal numeric
+    // cells with EU-decimal string cells the user typed by hand. Voting per row catches
+    // the EU row even when most of the sheet is US.
+    const format = detectDecimalFormat(rawValues)
     const values = rawValues.map(v => toNumber(v, format))
     if (values.some(v => isNaN(v))) return `Row ${i + 1} ("${metric}") contains non-numeric values.`
 

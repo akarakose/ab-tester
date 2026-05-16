@@ -176,7 +176,7 @@ function BinomialVariantFields({ index, props }: { index: number; props: Propert
   const rate = props.metric_values[index]?.[0]
   const conversions = visitors !== undefined && rate !== undefined ? Math.round(rate * visitors) : undefined
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       <div className="flex flex-col gap-1">
         <label className={labelClass}>Visitors</label>
         <input
@@ -208,7 +208,7 @@ function ContinuousVariantFields({ index, props }: { index: number; props: Prope
   const initialStdDev = savedStdDev === null || savedStdDev === undefined ? '' : String(savedStdDev)
   const [stdDev, setStdDev] = useState(initialStdDev)
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
       <div className="flex flex-col gap-1">
         <label className={labelClass}>Mean</label>
         <input

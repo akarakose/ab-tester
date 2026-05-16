@@ -478,7 +478,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
   return (
     <form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-5">
       {sheetSource && (
-        <div className="flex items-start justify-between gap-3 rounded-lg border border-foreground/10 px-4 py-3 bg-foreground/[0.02]">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3 rounded-lg border border-foreground/10 px-4 py-3 bg-foreground/[0.02]">
           <div className="min-w-0">
             <p className="text-xs font-medium text-foreground/70">Connected to a Google Sheet</p>
             <p className="text-xs text-foreground/45 mt-0.5 truncate">
@@ -491,7 +491,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
             type="button"
             onClick={handleRepull}
             disabled={isRepulling}
-            className="text-xs px-3 py-1.5 rounded-md border border-foreground/15 hover:border-foreground/35 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+            className="text-xs px-3 py-1.5 rounded-md border border-foreground/15 hover:border-foreground/35 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 self-start sm:self-auto"
             title="Replace metrics with the latest snapshot from the sheet (name, status, and confidence level are kept)."
           >
             {isRepulling ? 'Re-pulling…' : 'Re-pull from sheet'}
@@ -581,7 +581,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
                 <div className="flex flex-col gap-2">
                   {variantNames.map((vName, vi) => (
                     <div key={vi} className="flex items-center gap-3">
-                      <span className="text-sm text-foreground/60 w-32 shrink-0 truncate">{vName || `Variant ${vi + 1}`}</span>
+                      <span className="text-sm text-foreground/60 w-20 sm:w-32 shrink-0 truncate">{vName || `Variant ${vi + 1}`}</span>
                       <input
                         type="number"
                         min="1"
@@ -631,8 +631,8 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
 
       <div className="flex flex-col gap-2">
         <label className={labelClass}>Metrics</label>
-        <div className="border border-foreground/10 rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="border border-foreground/10 rounded-xl overflow-x-auto">
+          <table className="w-full text-sm min-w-[640px]">
             <thead>
               <tr className="border-b border-foreground/10" style={{ backgroundColor: 'color-mix(in srgb, var(--foreground) 4%, var(--background))' }}>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-foreground/50">Metric</th>
