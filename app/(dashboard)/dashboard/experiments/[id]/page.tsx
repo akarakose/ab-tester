@@ -1,9 +1,10 @@
 import { Fragment } from 'react'
 import type { Metadata } from 'next'
+import type { BinomialMetricResult, ContinuousMetricResult } from '@/types/experiment'
 import { getExperiment } from '@/lib/actions/experiments'
 import { calculateResults, calculateMultipleMeasuresResults } from '@/lib/stats'
 import { calculateContinuousResults } from '@/lib/logic/welch'
-import { fmtPct, fmtNum } from '@/lib/format'
+import { fmtPct, fmtNum, fmtValue } from '@/lib/format'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import EditForm from './EditForm'
@@ -91,14 +92,19 @@ export default async function ExperimentPage({
     const measureResults = calculateMultipleMeasuresResults(props, experiment.confidence_level)
     const variantNames = props.variant_names
     const challengerNames = variantNames.slice(1)
+    const testableResults = measureResults.filter(
+      (r): r is BinomialMetricResult | ContinuousMetricResult => r.type !== 'no_test' && r.tested
+    )
     const significantPerVariant = challengerNames.map((name, i) => ({
       name,
-      count: measureResults.filter(r => r.challengers[i]?.is_significant).length,
+      count: testableResults.filter(r => r.challengers[i]?.is_significant).length,
     }))
     const anySignificant = significantPerVariant.some(v => v.count > 0)
 
     const visitorGroups: { visitors: number[]; metricNames: string[]; label: string }[] = []
     for (let m = 0; m < props.metric_names.length; m++) {
+      if (props.metric_types[m] === 'no_test') continue
+      if (props.metric_tested?.[m] === false) continue
       const visitors = variantNames.map((_, i) => props.N[i]?.[m] ?? 0)
       const label = props.visitor_group_labels[m] ?? ''
       const existing = visitorGroups.find(g => g.label === label && g.visitors.length === visitors.length && g.visitors.every((v, i) => v === visitors[i]))
@@ -128,18 +134,23 @@ export default async function ExperimentPage({
           <h2 className="font-semibold mb-4">Results</h2>
 
           <div className={`rounded-lg p-4 mb-5 ${anySignificant ? 'bg-green-50 dark:bg-green-900/20' : 'bg-foreground/5'}`}>
-            {anySignificant ? (
+            {testableResults.length === 0 ? (
+              <>
+                <p className="font-semibold text-foreground/60">No statistical tests applied</p>
+                <p className="text-sm text-foreground/50 mt-0.5">All metrics are marked as &quot;no test&quot;.</p>
+              </>
+            ) : anySignificant ? (
               <>
                 {challengerNames.length === 1 ? (
                   <p className="font-semibold text-green-700 dark:text-green-400">
-                    {significantPerVariant[0].count} of {measureResults.length} metrics significant
+                    {significantPerVariant[0].count} of {testableResults.length} metrics significant
                   </p>
                 ) : (
                   <div className="flex flex-col gap-0.5">
                     {significantPerVariant.map(v => (
                       <p key={v.name} className={`font-semibold ${v.count > 0 ? 'text-green-700 dark:text-green-400' : 'text-foreground/60'}`}>
                         {v.count > 0
-                          ? `${v.count} of ${measureResults.length} metrics significant in ${v.name}`
+                          ? `${v.count} of ${testableResults.length} metrics significant in ${v.name}`
                           : `No significant metrics in ${v.name}`}
                       </p>
                     ))}
@@ -171,10 +182,10 @@ export default async function ExperimentPage({
                 </tr>
                 <tr className="border-b border-foreground/10">
                   <th />
-                  <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">Rate</th>
+                  <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">Value</th>
                   {challengerNames.map(v => (
                     <Fragment key={v}>
-                      <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">Rate</th>
+                      <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">Value</th>
                       <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">Uplift</th>
                       <th className="text-right py-1.5 px-3 text-foreground/40 font-medium text-xs">P-value</th>
                     </Fragment>
@@ -182,24 +193,65 @@ export default async function ExperimentPage({
                 </tr>
               </thead>
               <tbody>
-                {measureResults.map((r, i) => (
-                  <tr key={r.metricName} className={`border-b border-foreground/5 last:border-0 ${i % 2 === 0 ? '' : 'bg-foreground/[0.015]'}`}>
-                    <td className="py-2.5 pr-6 font-medium whitespace-nowrap">{r.metricName}</td>
-                    <td className="py-2.5 px-3 text-right">{fmtPct(r.control.rate)}</td>
-                    {r.challengers.map(c => (
-                      <Fragment key={c.name}>
-                        <td className="py-2.5 px-3 text-right">{fmtPct(c.conversion_rate)}</td>
-                        <td className={`py-2.5 px-3 text-right font-medium ${c.uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                          {Number.isFinite(c.uplift) ? `${c.uplift >= 0 ? '+' : ''}${c.uplift.toFixed(2)}%` : '—'}
-                        </td>
-                        <td className={`py-2.5 px-3 text-right ${c.is_significant ? (c.uplift >= 0 ? 'text-green-600 font-medium' : 'text-red-500 font-medium') : ''}`}>
-                          {fmtNum(c.p_value, 4)}
-                          {c.is_significant && <span className="ml-1.5 text-xs">✓</span>}
-                        </td>
-                      </Fragment>
-                    ))}
-                  </tr>
-                ))}
+                {measureResults.map((r, i) => {
+                  const untested = r.type !== 'no_test' && !r.tested
+                  const typeLabel =
+                    r.type === 'no_test' || untested ? 'no test' :
+                    r.type === 'continuous' ? 'cont.' : 'binom.'
+                  const typeColor =
+                    r.type === 'no_test' || untested ? 'text-amber-600/80 dark:text-amber-500/80' :
+                    r.type === 'continuous' ? 'text-purple-500/70' : 'text-foreground/40'
+                  return (
+                    <tr key={r.metricName} className={`border-b border-foreground/5 last:border-0 ${i % 2 === 0 ? '' : 'bg-foreground/[0.015]'}`}>
+                      <td className="py-2.5 pr-6 font-medium whitespace-nowrap">
+                        {r.metricName}
+                        <span className={`ml-1.5 text-[10px] uppercase tracking-wide font-normal ${typeColor}`}>
+                          {typeLabel}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        {r.type === 'continuous'
+                          ? fmtValue(r.control.mean, props.metric_formats?.[i])
+                          : r.type === 'no_test'
+                            ? fmtValue(r.control.value, props.metric_formats?.[i])
+                            : fmtPct(r.control.rate)}
+                      </td>
+                      {r.type === 'continuous' && r.challengers.map(c => (
+                        <Fragment key={c.name}>
+                          <td className="py-2.5 px-3 text-right">{fmtValue(c.mean, props.metric_formats?.[i])}</td>
+                          <td className={`py-2.5 px-3 text-right font-medium ${c.uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                            {Number.isFinite(c.uplift) ? `${c.uplift >= 0 ? '+' : ''}${c.uplift.toFixed(2)}%` : '—'}
+                          </td>
+                          <td className={`py-2.5 px-3 text-right ${c.is_significant ? (c.uplift >= 0 ? 'text-green-600 font-medium' : 'text-red-500 font-medium') : ''}`}>
+                            {fmtNum(c.p_value, 4)}
+                            {c.is_significant && <span className="ml-1.5 text-xs">✓</span>}
+                          </td>
+                        </Fragment>
+                      ))}
+                      {r.type === 'binomial' && r.challengers.map(c => (
+                        <Fragment key={c.name}>
+                          <td className="py-2.5 px-3 text-right">{fmtPct(c.conversion_rate)}</td>
+                          <td className={`py-2.5 px-3 text-right font-medium ${c.uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                            {Number.isFinite(c.uplift) ? `${c.uplift >= 0 ? '+' : ''}${c.uplift.toFixed(2)}%` : '—'}
+                          </td>
+                          <td className={`py-2.5 px-3 text-right ${c.is_significant ? (c.uplift >= 0 ? 'text-green-600 font-medium' : 'text-red-500 font-medium') : ''}`}>
+                            {fmtNum(c.p_value, 4)}
+                            {c.is_significant && <span className="ml-1.5 text-xs">✓</span>}
+                          </td>
+                        </Fragment>
+                      ))}
+                      {r.type === 'no_test' && r.challengers.map(c => (
+                        <Fragment key={c.name}>
+                          <td className="py-2.5 px-3 text-right">{fmtValue(c.value, props.metric_formats?.[i])}</td>
+                          <td className={`py-2.5 px-3 text-right font-medium ${c.uplift >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                            {Number.isFinite(c.uplift) ? `${c.uplift >= 0 ? '+' : ''}${c.uplift.toFixed(2)}%` : '—'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right text-foreground/30" title="No statistical test applied">—</td>
+                        </Fragment>
+                      ))}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

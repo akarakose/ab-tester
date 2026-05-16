@@ -18,7 +18,7 @@ export default function NewExperimentTypePage() {
 
       <div className="flex flex-col gap-3">
         <Link
-          href="/dashboard/experiments/new/csv"
+          href="/dashboard/experiments/new/upload"
           className="group flex items-start gap-4 border border-foreground/15 rounded-xl p-5 hover:border-brand/50 hover:bg-brand/5 transition-colors"
         >
           <div className="mt-0.5 w-9 h-9 rounded-lg bg-foreground/8 flex items-center justify-center shrink-0 group-hover:bg-brand/10 transition-colors">
@@ -27,8 +27,24 @@ export default function NewExperimentTypePage() {
             </svg>
           </div>
           <div>
-            <p className="font-medium text-sm">Upload CSV</p>
-            <p className="text-sm text-foreground/50 mt-0.5">Import experiment data from a spreadsheet or analytics export.</p>
+            <p className="font-medium text-sm">Upload file</p>
+            <p className="text-sm text-foreground/50 mt-0.5">Import experiment data from a CSV or Excel file.</p>
+          </div>
+        </Link>
+
+        <Link
+          href="/dashboard/experiments/new/sheets"
+          className="group flex items-start gap-4 border border-foreground/15 rounded-xl p-5 hover:border-brand/50 hover:bg-brand/5 transition-colors"
+        >
+          <div className="mt-0.5 w-9 h-9 rounded-lg bg-foreground/8 flex items-center justify-center shrink-0 group-hover:bg-brand/10 transition-colors">
+            <svg className="w-5 h-5 text-foreground/50 group-hover:text-brand transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3h16.5a.75.75 0 01.75.75v16.5a.75.75 0 01-.75.75H3.75a.75.75 0 01-.75-.75V3.75A.75.75 0 013.75 3z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 9h18M3 15h18M9 3v18M15 3v18" />
+            </svg>
+          </div>
+          <div>
+            <p className="font-medium text-sm">Connect Google Sheet</p>
+            <p className="text-sm text-foreground/50 mt-0.5">Paste a sheet URL — values are imported as a snapshot, with a re-pull option later.</p>
           </div>
         </Link>
 

@@ -67,7 +67,7 @@ export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode })
   const hasAnyFilter = !!nameInput || advancedFilterCount > 0
 
   return (
-    <div className="mb-4 flex items-center gap-3">
+    <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       {/* Search bar — relative anchor for the floating panel */}
       <div ref={containerRef} className="relative flex-1">
         {/* Search bar */}

@@ -1,9 +1,9 @@
 import { Fragment } from 'react'
 import { calculateResults, calculateMultipleMeasuresResults } from '@/lib/stats'
 import { calculateContinuousResults } from '@/lib/logic/welch'
-import { fmtPct, fmtNum } from '@/lib/format'
+import { fmtPct, fmtNum, fmtValue } from '@/lib/format'
 import Link from 'next/link'
-import type { Experiment } from '@/types/experiment'
+import type { BinomialMetricResult, ContinuousMetricResult, Experiment } from '@/types/experiment'
 import StatusBadge from '@/components/ui/StatusBadge'
 
 export default function ExperimentCard({ experiment }: { experiment: Experiment }) {
@@ -76,9 +76,12 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
     const measureResults = calculateMultipleMeasuresResults(props, experiment.confidence_level)
     const variantNames = props.variant_names
     const challengerNames = variantNames.slice(1)
+    const testableResults = measureResults.filter(
+      (r): r is BinomialMetricResult | ContinuousMetricResult => r.type !== 'no_test' && r.tested
+    )
     const significantPerVariant = challengerNames.map((name, i) => ({
       name,
-      count: measureResults.filter(r => r.challengers[i]?.is_significant).length,
+      count: testableResults.filter(r => r.challengers[i]?.is_significant).length,
     }))
     const anySignificant = significantPerVariant.some(v => v.count > 0)
     const displayedResults = measureResults.slice(0, 5)
@@ -117,17 +120,37 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
               </tr>
             </thead>
             <tbody>
-              {displayedResults.map(r => (
+              {displayedResults.map((r, i) => (
                 <tr key={r.metricName} className="border-b border-foreground/5 last:border-0">
-                  <td className="py-1 pr-4 font-medium truncate max-w-[110px]">{r.metricName}</td>
-                  <td className="py-1 px-2 text-right text-foreground/60">{fmtPct(r.control.rate)}</td>
+                  <td className="py-1 pr-4 font-medium truncate max-w-[110px] sm:max-w-[180px]">{r.metricName}</td>
+                  <td className="py-1 px-2 text-right text-foreground/60">
+                    {r.type === 'continuous'
+                      ? fmtValue(r.control.mean, props.metric_formats?.[i])
+                      : r.type === 'no_test'
+                        ? fmtValue(r.control.value, props.metric_formats?.[i])
+                        : fmtPct(r.control.rate)}
+                  </td>
                   <td className="py-1 px-1 text-foreground/20">—</td>
-                  {r.challengers.map(c => (
+                  {r.type === 'continuous' && r.challengers.map(c => (
+                    <Fragment key={c.name}>
+                      <td className="py-1 px-2 text-right text-foreground/60">{fmtValue(c.mean, props.metric_formats?.[i])}</td>
+                      <td className={`py-1 px-1 ${c.is_significant ? (c.uplift >= 0 ? 'text-green-600' : 'text-red-500') : 'text-foreground/20'}`}>
+                        {c.is_significant ? '✓' : '—'}
+                      </td>
+                    </Fragment>
+                  ))}
+                  {r.type === 'binomial' && r.challengers.map(c => (
                     <Fragment key={c.name}>
                       <td className="py-1 px-2 text-right text-foreground/60">{fmtPct(c.conversion_rate)}</td>
                       <td className={`py-1 px-1 ${c.is_significant ? (c.uplift >= 0 ? 'text-green-600' : 'text-red-500') : 'text-foreground/20'}`}>
                         {c.is_significant ? '✓' : '—'}
                       </td>
+                    </Fragment>
+                  ))}
+                  {r.type === 'no_test' && r.challengers.map(c => (
+                    <Fragment key={c.name}>
+                      <td className="py-1 px-2 text-right text-foreground/60">{fmtValue(c.value, props.metric_formats?.[i])}</td>
+                      <td className="py-1 px-1 text-foreground/20" title="No test">—</td>
                     </Fragment>
                   ))}
                 </tr>
@@ -144,20 +167,26 @@ export default function ExperimentCard({ experiment }: { experiment: Experiment 
           <div className="text-xs text-foreground/50">
             {challengerNames.length === 1 ? (
               <p>
-                {significantPerVariant[0].count > 0
-                  ? `${significantPerVariant[0].count} of ${measureResults.length} metrics significant`
-                  : 'No significant metrics yet'}
+                {testableResults.length === 0
+                  ? 'No tests applied'
+                  : significantPerVariant[0].count > 0
+                    ? `${significantPerVariant[0].count} of ${testableResults.length} metrics significant`
+                    : 'No significant metrics yet'}
                 {' · '}{measureResults.length} metrics · {variantNames.length} variants
               </p>
             ) : (
               <>
-                {significantPerVariant.map(v => (
-                  <p key={v.name}>
-                    {v.count > 0
-                      ? `${v.count} of ${measureResults.length} metrics significant in ${v.name}`
-                      : `No significant metrics in ${v.name}`}
-                  </p>
-                ))}
+                {testableResults.length === 0 ? (
+                  <p>No tests applied</p>
+                ) : (
+                  significantPerVariant.map(v => (
+                    <p key={v.name}>
+                      {v.count > 0
+                        ? `${v.count} of ${testableResults.length} metrics significant in ${v.name}`
+                        : `No significant metrics in ${v.name}`}
+                    </p>
+                  ))
+                )}
                 <p>{measureResults.length} metrics · {variantNames.length} variants</p>
               </>
             )}
