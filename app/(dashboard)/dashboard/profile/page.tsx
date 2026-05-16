@@ -1,9 +1,8 @@
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
-import ProfileForm from './ProfileForm'
-import EmailForm from './EmailForm'
-import PasswordForm from './PasswordForm'
+import EmailEditor from './EmailEditor'
+import CompanyNameEditor from './CompanyNameEditor'
+import PasswordEditor from './PasswordEditor'
 import DeleteAccountSection from './DeleteAccountSection'
 
 export const metadata = { title: 'Account Settings' }
@@ -28,44 +27,30 @@ export default async function SettingsPage() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-10">
       <header className="mb-8">
-        <Link
-          href="/dashboard/experiments"
-          className="inline-flex items-center gap-1 text-sm text-foreground/60 hover:text-foreground transition-colors mb-4"
-        >
-          <span aria-hidden>←</span> Back to dashboard
-        </Link>
         <h1 className="text-2xl font-bold tracking-tight">Account settings</h1>
-        <p className="text-sm text-foreground/60 mt-1">Manage your profile, email, and password.</p>
+        <p className="text-sm text-foreground/60 mt-1">Manage your profile and password.</p>
       </header>
 
       <section className="rounded-2xl border border-foreground/10 bg-background p-6 mb-6">
         <h2 className="text-base font-semibold mb-1">Profile</h2>
         <p className="text-sm text-foreground/60 mb-5">Your account details.</p>
-        <dl className="grid grid-cols-3 gap-x-4 gap-y-2 text-sm mb-6">
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-8 gap-y-4 items-baseline text-sm">
           <dt className="text-foreground/60">Email</dt>
-          <dd className="col-span-2 text-foreground">{session.user.email}</dd>
+          <dd><EmailEditor currentEmail={session.user.email ?? ''} /></dd>
+
+          <dt className="text-foreground/60">Company name</dt>
+          <dd><CompanyNameEditor initialCompanyName={profile?.company_name ?? ''} /></dd>
+
+          <dt className="text-foreground/60">Password</dt>
+          <dd><PasswordEditor /></dd>
+
           {memberSince && (
             <>
               <dt className="text-foreground/60">Member since</dt>
-              <dd className="col-span-2 text-foreground">{memberSince}</dd>
+              <dd className="text-foreground">{memberSince}</dd>
             </>
           )}
         </dl>
-        <ProfileForm initialCompanyName={profile?.company_name ?? ''} />
-      </section>
-
-      <section className="rounded-2xl border border-foreground/10 bg-background p-6 mb-6">
-        <h2 className="text-base font-semibold mb-1">Change email</h2>
-        <p className="text-sm text-foreground/60 mb-5">
-          You will receive confirmation links at both your current and new email. Both must be clicked.
-        </p>
-        <EmailForm currentEmail={session.user.email ?? ''} />
-      </section>
-
-      <section className="rounded-2xl border border-foreground/10 bg-background p-6 mb-6">
-        <h2 className="text-base font-semibold mb-1">Change password</h2>
-        <p className="text-sm text-foreground/60 mb-5">Enter your current password to set a new one.</p>
-        <PasswordForm />
       </section>
 
       <section className="rounded-2xl border border-red-500/20 bg-red-500/5 p-6">

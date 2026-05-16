@@ -5,6 +5,10 @@ import { useState, useEffect, useRef, useTransition } from 'react'
 import type { ReactNode } from 'react'
 
 const fieldClass = 'border border-foreground/15 rounded-lg px-2.5 py-1.5 bg-background text-sm outline-none focus:ring-2 focus:ring-brand w-full'
+// Date inputs share a flex row, so they need to flex-shrink below their
+// intrinsic min-width (~130px for the calendar picker). Without `min-w-0`
+// they overflow and collide with the panel border.
+const dateInputClass = 'border border-foreground/15 rounded-lg px-2.5 py-1.5 bg-background text-sm outline-none focus:ring-2 focus:ring-brand flex-1 min-w-0'
 
 export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode }) {
   const router = useRouter()
@@ -112,62 +116,61 @@ export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode })
           </button>
         </div>
 
-        {/* Floating filter panel */}
+        {/* Floating filter panel — left-aligned with the search bar so the panel's
+            left edge always lines up with the search input. Fixed width on desktop
+            so the date range inputs don't get squeezed when the search bar shrinks
+            behind a wider rightSlot. */}
         {open && (
-          <div className="absolute top-full left-0 right-0 mt-1.5 z-20 rounded-xl border border-foreground/15 shadow-xl shadow-foreground/10 p-4 flex flex-col gap-3"
-            style={{ backgroundColor: 'color-mix(in srgb, var(--foreground) 5%, var(--background))' }}
-          >
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-foreground/50 font-medium">Status</label>
-                <select
-                  value={searchParams.get('status') ?? ''}
-                  onChange={e => updateParam('status', e.target.value)}
-                  className={fieldClass}
-                >
-                  <option value="">All statuses</option>
-                  <option value="draft">Draft</option>
-                  <option value="running">Running</option>
-                  <option value="concluded">Concluded</option>
-                </select>
-              </div>
+          <div className="absolute top-full left-0 mt-1.5 z-20 w-full sm:w-80 rounded-xl border border-foreground/15 bg-background p-4 flex flex-col gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-foreground/50 font-medium">Status</label>
+              <select
+                value={searchParams.get('status') ?? ''}
+                onChange={e => updateParam('status', e.target.value)}
+                className={fieldClass}
+              >
+                <option value="">All statuses</option>
+                <option value="draft">Draft</option>
+                <option value="running">Running</option>
+                <option value="concluded">Concluded</option>
+              </select>
+            </div>
 
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-foreground/50 font-medium">Created</label>
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="date"
-                    defaultValue={searchParams.get('created_from') ?? ''}
-                    onChange={e => updateParam('created_from', e.target.value)}
-                    className={fieldClass}
-                  />
-                  <span className="text-xs text-foreground/35 shrink-0">–</span>
-                  <input
-                    type="date"
-                    defaultValue={searchParams.get('created_to') ?? ''}
-                    onChange={e => updateParam('created_to', e.target.value)}
-                    className={fieldClass}
-                  />
-                </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-foreground/50 font-medium">Created</label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="date"
+                  defaultValue={searchParams.get('created_from') ?? ''}
+                  onChange={e => updateParam('created_from', e.target.value)}
+                  className={dateInputClass}
+                />
+                <span className="text-xs text-foreground/35 shrink-0">–</span>
+                <input
+                  type="date"
+                  defaultValue={searchParams.get('created_to') ?? ''}
+                  onChange={e => updateParam('created_to', e.target.value)}
+                  className={dateInputClass}
+                />
               </div>
+            </div>
 
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-foreground/50 font-medium">Last updated</label>
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="date"
-                    defaultValue={searchParams.get('updated_from') ?? ''}
-                    onChange={e => updateParam('updated_from', e.target.value)}
-                    className={fieldClass}
-                  />
-                  <span className="text-xs text-foreground/35 shrink-0">–</span>
-                  <input
-                    type="date"
-                    defaultValue={searchParams.get('updated_to') ?? ''}
-                    onChange={e => updateParam('updated_to', e.target.value)}
-                    className={fieldClass}
-                  />
-                </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-foreground/50 font-medium">Last updated</label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="date"
+                  defaultValue={searchParams.get('updated_from') ?? ''}
+                  onChange={e => updateParam('updated_from', e.target.value)}
+                  className={dateInputClass}
+                />
+                <span className="text-xs text-foreground/35 shrink-0">–</span>
+                <input
+                  type="date"
+                  defaultValue={searchParams.get('updated_to') ?? ''}
+                  onChange={e => updateParam('updated_to', e.target.value)}
+                  className={dateInputClass}
+                />
               </div>
             </div>
 

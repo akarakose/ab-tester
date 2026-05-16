@@ -10,7 +10,8 @@ import Link from 'next/link'
 import EditForm from './EditForm'
 import CsvEditForm from './CsvEditForm'
 import ContinuousResultsTable from './ContinuousResultsTable'
-import DeleteButton from './DeleteButton'
+import ActiveActions from './ActiveActions'
+import ArchivedActions from './ArchivedActions'
 import StatusBadge from '@/components/ui/StatusBadge'
 
 export async function generateMetadata({
@@ -34,6 +35,21 @@ export default async function ExperimentPage({
 
   const confidencePct = (experiment.confidence_level * 100).toFixed(0)
   const props = experiment.properties
+  const isArchived = experiment.deleted_at != null
+  const actions = isArchived ? <ArchivedActions id={experiment.id} /> : <ActiveActions id={experiment.id} />
+  const archivedBanner = isArchived ? (
+    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 mb-6 flex items-start gap-3">
+      <svg className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M20 7H4a1 1 0 01-1-1V4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-1 1zM4 7v12a1 1 0 001 1h14a1 1 0 001-1V7M10 11h4" />
+      </svg>
+      <div className="text-sm">
+        <p className="font-medium text-amber-700 dark:text-amber-400">This experiment is archived</p>
+        <p className="text-xs text-foreground/60 mt-0.5">
+          Restore to continue editing, or delete it permanently. Edits are disabled while archived.
+        </p>
+      </div>
+    </div>
+  ) : null
 
   if (props.experiment_type === 'continuous_single') {
     const continuousResults = calculateContinuousResults(props, experiment.confidence_level)
@@ -43,6 +59,7 @@ export default async function ExperimentPage({
 
     return (
       <div className="max-w-3xl mx-auto px-6 py-8">
+        {archivedBanner}
         <div className="flex items-start justify-between gap-4 mb-8">
           <div>
             <Link href="/dashboard/experiments" className="text-sm text-foreground/50 hover:text-foreground transition-colors">
@@ -55,7 +72,7 @@ export default async function ExperimentPage({
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <StatusBadge status={experiment.status} />
-            <DeleteButton id={experiment.id} />
+            {actions}
           </div>
         </div>
 
@@ -80,10 +97,12 @@ export default async function ExperimentPage({
           <p className="text-xs text-foreground/40 mt-4">Confidence level: {confidencePct}%</p>
         </div>
 
-        <div className="border border-foreground/10 rounded-xl p-5">
-          <h2 className="font-semibold mb-5">Edit experiment</h2>
-          <EditForm experiment={experiment} />
-        </div>
+        {!isArchived && (
+          <div className="border border-foreground/10 rounded-xl p-5">
+            <h2 className="font-semibold mb-5">Edit experiment</h2>
+            <EditForm experiment={experiment} />
+          </div>
+        )}
       </div>
     )
   }
@@ -114,6 +133,7 @@ export default async function ExperimentPage({
 
     return (
       <div className="max-w-3xl mx-auto px-6 py-8">
+        {archivedBanner}
         <div className="flex items-start justify-between gap-4 mb-8">
           <div>
             <Link href="/dashboard/experiments" className="text-sm text-foreground/50 hover:text-foreground transition-colors">
@@ -126,7 +146,7 @@ export default async function ExperimentPage({
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <StatusBadge status={experiment.status} />
-            <DeleteButton id={experiment.id} />
+            {actions}
           </div>
         </div>
 
@@ -277,10 +297,12 @@ export default async function ExperimentPage({
           </div>
         </div>
 
-        <div className="border border-foreground/10 rounded-xl p-5">
-          <h2 className="font-semibold mb-5">Edit experiment</h2>
-          <CsvEditForm experiment={experiment} />
-        </div>
+        {!isArchived && (
+          <div className="border border-foreground/10 rounded-xl p-5">
+            <h2 className="font-semibold mb-5">Edit experiment</h2>
+            <CsvEditForm experiment={experiment} />
+          </div>
+        )}
       </div>
     )
   }
@@ -294,6 +316,7 @@ export default async function ExperimentPage({
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-8">
+      {archivedBanner}
       <div className="flex items-start justify-between gap-4 mb-8">
         <div>
           <Link href="/dashboard/experiments" className="text-sm text-foreground/50 hover:text-foreground transition-colors">
@@ -306,7 +329,7 @@ export default async function ExperimentPage({
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <StatusBadge status={experiment.status} />
-          <DeleteButton id={experiment.id} />
+          {actions}
         </div>
       </div>
 
@@ -371,10 +394,12 @@ export default async function ExperimentPage({
         </p>
       </div>
 
-      <div className="border border-foreground/10 rounded-xl p-5">
-        <h2 className="font-semibold mb-5">Edit experiment</h2>
-        <EditForm experiment={experiment} />
-      </div>
+      {!isArchived && (
+        <div className="border border-foreground/10 rounded-xl p-5">
+          <h2 className="font-semibold mb-5">Edit experiment</h2>
+          <EditForm experiment={experiment} />
+        </div>
+      )}
     </div>
   )
 }
