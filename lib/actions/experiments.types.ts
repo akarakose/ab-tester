@@ -20,6 +20,7 @@ export type ExperimentFilters = {
   createdTo?: string
   updatedFrom?: string
   updatedTo?: string
+  archived?: boolean
 }
 
 export type CsvMetricInput = {

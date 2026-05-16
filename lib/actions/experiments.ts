@@ -281,8 +281,11 @@ export async function getExperiments(
   let query = supabase
     .from('experiments')
     .select('*')
-    .is('deleted_at', null)
     .order(dbSortField, { ascending: sortOrder === 'asc' })
+
+  query = filters.archived
+    ? query.not('deleted_at', 'is', null)
+    : query.is('deleted_at', null)
 
   if (filters.name) query = query.ilike('name', `%${filters.name}%`)
   if (filters.status) query = query.eq('status', filters.status)
@@ -312,7 +315,6 @@ export async function getExperiment(id: string): Promise<Experiment | null> {
     .from('experiments')
     .select('*')
     .eq('id', id)
-    .is('deleted_at', null)
     .single()
   if (error) return null
   return data
@@ -514,7 +516,7 @@ export async function updateCsvExperiment(
   }
 }
 
-export async function deleteExperiment(id: string): Promise<{ error: string } | void> {
+export async function archiveExperiment(id: string): Promise<{ error: string } | void> {
   try {
     const { supabase } = await getAuthenticatedUser()
     const { error } = await supabase
@@ -522,8 +524,45 @@ export async function deleteExperiment(id: string): Promise<{ error: string } | 
       .update({ deleted_at: new Date().toISOString() })
       .eq('id', id)
     if (error) return { error: error.message }
-    revalidateExperimentPaths()
+    revalidateExperimentPaths(id)
     redirect('/dashboard/experiments')
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
+}
+
+export async function restoreExperiment(id: string): Promise<{ error: string } | void> {
+  try {
+    const { supabase } = await getAuthenticatedUser()
+    const { error } = await supabase
+      .from('experiments')
+      .update({ deleted_at: null })
+      .eq('id', id)
+    if (error) return { error: error.message }
+    revalidateExperimentPaths(id)
+    redirect(`/dashboard/experiments/${id}`)
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
+}
+
+export async function permanentlyDeleteExperiment(
+  id: string,
+  fromArchived: boolean = false,
+): Promise<{ error: string } | void> {
+  try {
+    const { supabase } = await getAuthenticatedUser()
+    const { error } = await supabase
+      .from('experiments')
+      .delete()
+      .eq('id', id)
+    if (error) return { error: error.message }
+    revalidateExperimentPaths(id)
+    redirect(fromArchived ? '/dashboard/experiments?archived=1' : '/dashboard/experiments')
   } catch (error) {
     if (isNextInternalError(error)) throw error
     Sentry.captureException(error)

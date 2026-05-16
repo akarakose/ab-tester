@@ -1,24 +1,21 @@
 'use client'
 
 import { useState } from 'react'
-import { archiveExperiment, permanentlyDeleteExperiment } from '@/lib/actions/experiments'
+import { restoreExperiment, permanentlyDeleteExperiment } from '@/lib/actions/experiments'
 import Spinner from '@/components/ui/Spinner'
 
-type Mode = 'idle' | 'confirm-archive' | 'confirm-delete'
-
-export default function ActiveActions({ id }: { id: string }) {
-  const [mode, setMode] = useState<Mode>('idle')
-  const [pendingAction, setPendingAction] = useState<'archive' | 'delete' | null>(null)
+export default function ArchivedActions({ id }: { id: string }) {
+  const [pendingAction, setPendingAction] = useState<'restore' | 'delete' | null>(null)
+  const [confirming, setConfirming] = useState(false)
   const [confirmInput, setConfirmInput] = useState('')
   const [error, setError] = useState<string | null>(null)
 
-  async function handleArchive() {
+  async function handleRestore() {
     setError(null)
-    setPendingAction('archive')
-    const result = await archiveExperiment(id)
+    setPendingAction('restore')
+    const result = await restoreExperiment(id)
     if (result?.error) {
       setError(result.error)
-      setMode('idle')
       setPendingAction(null)
     }
   }
@@ -26,41 +23,17 @@ export default function ActiveActions({ id }: { id: string }) {
   async function handlePermanentDelete() {
     setError(null)
     setPendingAction('delete')
-    const result = await permanentlyDeleteExperiment(id, false)
+    const result = await permanentlyDeleteExperiment(id, true)
     if (result?.error) {
       setError(result.error)
-      setMode('idle')
       setPendingAction(null)
-      setConfirmInput('')
+      setConfirming(false)
     }
   }
 
   const pending = pendingAction !== null
 
-  if (mode === 'confirm-archive') {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-foreground/50">Archive this experiment?</span>
-        <button
-          onClick={handleArchive}
-          disabled={pending}
-          className="text-sm text-foreground hover:text-foreground/80 font-medium disabled:opacity-50 transition-colors flex items-center gap-1.5"
-        >
-          {pendingAction === 'archive' && <Spinner />}
-          {pendingAction === 'archive' ? 'Archiving...' : 'Yes, archive'}
-        </button>
-        <button
-          onClick={() => setMode('idle')}
-          disabled={pending}
-          className="text-sm text-foreground/40 hover:text-foreground transition-colors disabled:opacity-50"
-        >
-          Cancel
-        </button>
-      </div>
-    )
-  }
-
-  if (mode === 'confirm-delete') {
+  if (confirming) {
     return (
       <div className="flex flex-col items-end gap-2 max-w-xs">
         <p className="text-xs text-foreground/70 text-right">
@@ -83,7 +56,7 @@ export default function ActiveActions({ id }: { id: string }) {
             {pendingAction === 'delete' ? 'Deleting...' : 'Permanently delete'}
           </button>
           <button
-            onClick={() => { setMode('idle'); setConfirmInput('') }}
+            onClick={() => { setConfirming(false); setConfirmInput('') }}
             disabled={pending}
             className="text-sm text-foreground/40 hover:text-foreground transition-colors disabled:opacity-50"
           >
@@ -100,14 +73,17 @@ export default function ActiveActions({ id }: { id: string }) {
       {error && <p className="text-xs text-red-500">{error}</p>}
       <div className="flex items-center gap-3">
         <button
-          onClick={() => setMode('confirm-archive')}
-          className="text-sm text-foreground/60 hover:text-foreground transition-colors"
+          onClick={handleRestore}
+          disabled={pending}
+          className="text-sm font-medium text-brand hover:opacity-80 disabled:opacity-50 transition-opacity flex items-center gap-1.5"
         >
-          Archive
+          {pendingAction === 'restore' && <Spinner />}
+          {pendingAction === 'restore' ? 'Restoring...' : 'Restore'}
         </button>
         <button
-          onClick={() => setMode('confirm-delete')}
-          className="text-sm text-red-500 hover:text-red-600 transition-colors"
+          onClick={() => setConfirming(true)}
+          disabled={pending}
+          className="text-sm text-red-500 hover:text-red-600 disabled:opacity-50 transition-colors"
         >
           Delete forever
         </button>
