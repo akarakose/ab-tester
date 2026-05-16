@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useTransition } from 'react'
+import { Fragment, useRef, useState, useTransition } from 'react'
 import { updateCsvExperiment } from '@/lib/actions/experiments'
 import { fetchGoogleSheet } from '@/lib/actions/sheets'
 import type { Experiment, MetricKind } from '@/types/experiment'
@@ -108,9 +108,13 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
   const [metrics, setMetrics] = useState<MetricRow[]>(initial.metrics)
   const [nextGroupId, setNextGroupId] = useState(initial.nextId)
   const [sheetSource] = useState(experiment.properties.sheet_source ?? null)
+  const formRef = useRef<HTMLFormElement>(null)
 
-  // Re-pull from the original Google Sheet. This is destructive — the existing metrics,
-  // visitor groups, and std devs are replaced by a fresh snapshot. Name/status/confidence stay.
+  // Re-pull from the original Google Sheet AND save in one click.
+  // - Metric names/types/values/formats come from the fresh sheet.
+  // - Visitor groups, visitor counts, labels, source links, std devs, and the `tested` flag
+  //   are preserved by NAME match so the user doesn't have to re-enter anything.
+  // - Pending name/status/confidence edits in the form are kept (read via formRef).
   const handleRepull = () => {
     if (!sheetSource) return
     setRepullError(null)
@@ -125,28 +129,114 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
         setRepullError(parsed)
         return
       }
-      const newGroupId = 1
+
+      const oldVariantNames = variantNames
+      const oldMetrics = metrics
+      const oldGroups = groups
       const newVariantNames = parsed.variantNames
-      const newGroups: VisitorGroup[] = [{
-        id: newGroupId,
-        visitors: newVariantNames.map(() => 0),
-        label: '',
-        sourceMetricIndex: null,
-      }]
-      const newMetrics: MetricRow[] = parsed.rows.map(r => ({
-        name: r.metric,
-        type: r.type,
-        values: r.values,
-        stdDevs: newVariantNames.map(() => ''),
-        showStdDev: false,
-        groupId: newGroupId,
-        format: r.format,
-        tested: r.type !== 'no_test',
-      }))
+      const oldMetricByName = new Map(oldMetrics.map(m => [m.name, m]))
+      const oldMetricNameByIdx = oldMetrics.map(m => m.name)
+
+      // Remap each visitor group's columns to the new variant order, then re-link source metric by name.
+      const remappedGroups: VisitorGroup[] = oldGroups.map(g => {
+        const newVisitors = newVariantNames.map(vn => {
+          const oldV = oldVariantNames.indexOf(vn)
+          return oldV >= 0 ? (g.visitors[oldV] ?? 0) : 0
+        })
+        let newSourceIdx: number | null = null
+        if (g.sourceMetricIndex !== null) {
+          const oldSourceName = oldMetricNameByIdx[g.sourceMetricIndex]
+          const i = oldSourceName ? parsed.rows.findIndex(r => r.metric === oldSourceName) : -1
+          newSourceIdx = i === -1 ? null : i
+        }
+        return { ...g, visitors: newVisitors, sourceMetricIndex: newSourceIdx }
+      })
+
+      // Source-linked groups inherit visitors from the (new) source metric's fresh values.
+      const finalGroups: VisitorGroup[] = remappedGroups.map(g => {
+        if (g.sourceMetricIndex === null) return g
+        const src = parsed.rows[g.sourceMetricIndex]
+        return src ? { ...g, visitors: [...src.values] } : g
+      })
+
+      const fallbackGroupId = finalGroups[0]?.id ?? 1
+      const newMetricRows: MetricRow[] = parsed.rows.map(r => {
+        const old = oldMetricByName.get(r.metric)
+        const stdDevs = newVariantNames.map(vn => {
+          if (!old) return ''
+          const oldV = oldVariantNames.indexOf(vn)
+          return oldV >= 0 ? (old.stdDevs[oldV] ?? '') : ''
+        })
+        const groupId = old && finalGroups.some(g => g.id === old.groupId) ? old.groupId : fallbackGroupId
+        return {
+          name: r.metric,
+          type: r.type,
+          values: r.values,
+          format: r.format,
+          stdDevs,
+          showStdDev: old?.showStdDev ?? false,
+          groupId,
+          tested: old ? old.tested : (r.type !== 'no_test'),
+        }
+      })
+
       setVariantNames(newVariantNames)
-      setGroups(newGroups)
-      setMetrics(newMetrics)
-      setNextGroupId(newGroupId + 1)
+      setGroups(finalGroups)
+      setMetrics(newMetricRows)
+
+      // Build the save payload directly from the just-computed values (setState hasn't applied yet).
+      const form = formRef.current
+      const name = (form?.elements.namedItem('name') as HTMLInputElement | null)?.value.trim() || experiment.name
+      const status = (form?.elements.namedItem('status') as HTMLSelectElement | null)?.value || experiment.status
+      const confidenceRaw = (form?.elements.namedItem('confidence_level') as HTMLInputElement | null)?.value
+      const confidence = confidenceRaw ? Number(confidenceRaw) : experiment.confidence_level * 100
+
+      const metricsPayload: CsvMetricInput[] = newMetricRows.map(m => {
+        if (m.type === 'no_test') {
+          return {
+            name: m.name, type: 'no_test', values: m.values,
+            visitors: newVariantNames.map(() => 0),
+            ...(m.format ? { format: m.format } : {}),
+          }
+        }
+        if (!m.tested) {
+          return {
+            name: m.name, type: m.type, values: m.values,
+            visitors: newVariantNames.map(() => 0),
+            tested: false,
+            ...(m.format ? { format: m.format } : {}),
+          }
+        }
+        const group = finalGroups.find(g => g.id === m.groupId) ?? finalGroups[0]
+        const sourceName = group.sourceMetricIndex !== null ? newMetricRows[group.sourceMetricIndex]?.name : undefined
+        const base: CsvMetricInput = {
+          name: m.name, type: m.type, values: m.values,
+          visitors: group.visitors,
+          ...(m.format ? { format: m.format } : {}),
+          ...(group.label ? { visitorGroupLabel: group.label } : {}),
+          ...(sourceName ? { visitorSourceMetric: sourceName } : {}),
+        }
+        if (m.type === 'continuous') {
+          base.std_devs = m.stdDevs.map(s => {
+            const t = s.trim()
+            if (t === '') return null
+            const n = Number(t)
+            return Number.isFinite(n) && n > 0 ? n : null
+          })
+        }
+        return base
+      })
+
+      const result = await updateCsvExperiment(experiment.id, {
+        name,
+        status,
+        variantNames: newVariantNames,
+        metrics: metricsPayload,
+        confidenceLevel: confidence,
+        ...(sheetSource ? { sheetSource } : {}),
+      })
+      // updateCsvExperiment redirects to the detail page on success, refreshing the results block.
+      if (result?.error) setRepullError(result.error)
     })
   }
 
@@ -386,7 +476,7 @@ export default function CsvEditForm({ experiment }: { experiment: Experiment }) 
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+    <form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-5">
       {sheetSource && (
         <div className="flex items-start justify-between gap-3 rounded-lg border border-foreground/10 px-4 py-3 bg-foreground/[0.02]">
           <div className="min-w-0">
