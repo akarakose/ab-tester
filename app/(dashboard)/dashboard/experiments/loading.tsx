@@ -1,6 +1,6 @@
 export default function ExperimentsLoading() {
   return (
-    <div className="max-w-3xl mx-auto px-6 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       <div className="flex items-center justify-between mb-6">
         <div className="h-7 w-32 bg-foreground/10 rounded-md animate-pulse" />
         <div className="h-9 w-36 bg-foreground/10 rounded-lg animate-pulse" />

@@ -293,6 +293,8 @@ export async function getExperiments(
   if (filters.createdTo) query = query.lte('created_at', `${filters.createdTo}T23:59:59.999Z`)
   if (filters.updatedFrom) query = query.gte('updated_at', filters.updatedFrom)
   if (filters.updatedTo) query = query.lte('updated_at', `${filters.updatedTo}T23:59:59.999Z`)
+  if (filters.folderId === 'unfiled') query = query.is('folder_id', null)
+  else if (filters.folderId) query = query.eq('folder_id', filters.folderId)
 
   const { data, error } = await query
   if (error) throw new Error(error.message)
@@ -580,6 +582,27 @@ export async function bulkRestoreExperiments(ids: string[]): Promise<{ error?: s
       .not('deleted_at', 'is', null)
     if (error) return { error: error.message }
     revalidateExperimentPaths()
+    return { count: count ?? 0 }
+  } catch (error) {
+    if (isNextInternalError(error)) throw error
+    Sentry.captureException(error)
+    return { error: 'An unexpected error occurred. Please try again.' }
+  }
+}
+
+export async function bulkMoveExperimentsToFolder(
+  ids: string[],
+  folderId: string | null,
+): Promise<{ error?: string; count?: number }> {
+  try {
+    if (ids.length === 0) return { count: 0 }
+    const { supabase } = await getAuthenticatedUser()
+    const { error, count } = await supabase
+      .from('experiments')
+      .update({ folder_id: folderId }, { count: 'exact' })
+      .in('id', ids)
+    if (error) return { error: error.message }
+    revalidatePath('/dashboard/experiments')
     return { count: count ?? 0 }
   } catch (error) {
     if (isNextInternalError(error)) throw error

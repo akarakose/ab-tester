@@ -21,6 +21,11 @@ export type ExperimentFilters = {
   updatedFrom?: string
   updatedTo?: string
   archived?: boolean
+  // Folder filter for the /folders route:
+  //   string  → only experiments in that folder id
+  //   'unfiled' → only experiments with folder_id IS NULL
+  //   undefined → no folder filter (used by /experiments)
+  folderId?: string | 'unfiled'
 }
 
 export type CsvMetricInput = {

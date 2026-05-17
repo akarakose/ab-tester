@@ -14,7 +14,7 @@ export default function ExperimentsError({
   }, [error])
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       <div className="flex flex-col items-center justify-center py-20 border border-dashed border-red-200 dark:border-red-900 rounded-xl text-center">
         <p className="font-semibold text-foreground">Something went wrong</p>
         <p className="text-sm text-foreground/50 mt-1 mb-6">

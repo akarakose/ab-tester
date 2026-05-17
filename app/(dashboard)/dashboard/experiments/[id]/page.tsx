@@ -58,7 +58,7 @@ export default async function ExperimentPage({
     const metricName = props.metric_names[0] ?? 'Metric'
 
     return (
-      <div className="max-w-3xl mx-auto px-6 py-8">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
         {archivedBanner}
         <div className="flex items-start justify-between gap-4 mb-8">
           <div>
@@ -132,7 +132,7 @@ export default async function ExperimentPage({
     }
 
     return (
-      <div className="max-w-3xl mx-auto px-6 py-8">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
         {archivedBanner}
         <div className="flex items-start justify-between gap-4 mb-8">
           <div>
@@ -315,7 +315,7 @@ export default async function ExperimentPage({
   const conversions = (i: number) => Math.round((props.metric_values[i]?.[0] ?? 0) * visitors(i))
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-8">
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       {archivedBanner}
       <div className="flex items-start justify-between gap-4 mb-8">
         <div>
