@@ -62,3 +62,29 @@ body {
     animation: none;
   }
 }
+
+/* Native date inputs:
+   - accent-color tints the picker's selected day with our brand
+   - color-scheme lets the browser draw a dark popover on dark mode
+   The default WebKit calendar indicator is nearly invisible (dark glyph on
+   either background). Filters can't reliably recolor it, so we hide the
+   built-in glyph and paint our own via a CSS mask whose color is var(--brand)
+   — this works identically in light and dark mode since --brand swaps. */
+input[type="date"] {
+  accent-color: var(--brand);
+  color-scheme: light dark;
+}
+input[type="date"]::-webkit-calendar-picker-indicator {
+  background-color: var(--brand);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/></svg>") center / 20px no-repeat;
+          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/></svg>") center / 20px no-repeat;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  cursor: pointer;
+  opacity: 1;
+  transition: transform 120ms ease;
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  transform: scale(1.1);
+}

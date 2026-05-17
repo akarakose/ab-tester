@@ -1,19 +1,23 @@
 'use client'
 
-import { Suspense, useState, useTransition } from 'react'
+import { Suspense, useEffect, useRef, useState, useTransition } from 'react'
 import type { Experiment } from '@/types/experiment'
+import type { FolderNode } from '@/types/folder'
 import type { SortField, SortOrder } from '@/lib/actions/experiments.types'
 import {
   bulkArchiveExperiments,
   bulkRestoreExperiments,
   bulkPermanentlyDeleteExperiments,
+  bulkMoveExperimentsToFolder,
 } from '@/lib/actions/experiments'
+import { createFolder } from '@/lib/actions/folders'
 import ExperimentCard from './ExperimentCard'
 import ExperimentTile from './ExperimentTile'
 import ExperimentListRow from './ExperimentListRow'
 import FilterControls from './FilterControls'
 import ViewToggle, { type ExperimentView } from './ViewToggle'
 import SortControls from './SortControls'
+import FolderTreePicker from './FolderTreePicker'
 import Spinner from '@/components/ui/Spinner'
 
 type Props = {
@@ -22,17 +26,53 @@ type Props = {
   sortBy: SortField
   sortOrder: SortOrder
   archived: boolean
+  folders: FolderNode[]
+  // When rendered inside a folder, hide that folder from the picker so users
+  // don't move items "to" the folder they're already in.
+  currentFolderId?: string | null
+  // When true, experiment items are HTML5-draggable. Set on /folders pages
+  // where folder cards exist as drop targets.
+  enableDrag?: boolean
 }
 
 type Mode = 'browse' | 'confirm-archive' | 'confirm-restore' | 'confirm-delete'
 
-export default function ExperimentsList({ experiments, view, sortBy, sortOrder, archived }: Props) {
+const DRAG_MIME = 'application/x-ab-drag'
+
+export default function ExperimentsList({
+  experiments,
+  view,
+  sortBy,
+  sortOrder,
+  archived,
+  folders,
+  currentFolderId,
+  enableDrag = false,
+}: Props) {
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState<Mode>('browse')
   const [confirmInput, setConfirmInput] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [moveOpen, setMoveOpen] = useState(false)
+  const moveRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!moveOpen) return
+    function onPointerDown(e: MouseEvent) {
+      if (moveRef.current && !moveRef.current.contains(e.target as Node)) setMoveOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setMoveOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [moveOpen])
 
   const ids = Array.from(selected)
   const count = ids.length
@@ -85,6 +125,24 @@ export default function ExperimentsList({ experiments, view, sortBy, sortOrder, 
   const handleRestore = () => runBulk(() => bulkRestoreExperiments(ids))
   const handlePermanentDelete = () => runBulk(() => bulkPermanentlyDeleteExperiments(ids))
 
+  const handleMoveTo = (folderId: string | null) => {
+    setMoveOpen(false)
+    runBulk(() => bulkMoveExperimentsToFolder(ids, folderId))
+  }
+
+  const handleCreateAndPick = async (name: string, parentId: string | null) => {
+    const fd = new FormData()
+    fd.set('name', name)
+    if (parentId) fd.set('parent_id', parentId)
+    const result = await createFolder(undefined, fd)
+    if (result?.error) return { error: result.error }
+    if (result?.fieldErrors?.name) return { error: result.fieldErrors.name }
+    if (result?.createdId) handleMoveTo(result.createdId)
+    return {}
+  }
+
+  const disabledMoveTargets = currentFolderId ? new Set([currentFolderId]) : undefined
+
   const selectToggle = experiments.length > 0 ? (
     <button
       type="button"
@@ -130,6 +188,35 @@ export default function ExperimentsList({ experiments, view, sortBy, sortOrder, 
 
         {mode === 'browse' && count > 0 && (
           <div className="flex items-center gap-3 ml-auto">
+            <div className="relative" ref={moveRef}>
+              <button
+                type="button"
+                onClick={() => setMoveOpen(v => !v)}
+                disabled={isPending}
+                aria-haspopup="menu"
+                aria-expanded={moveOpen}
+                className="text-sm text-foreground hover:text-foreground/80 disabled:opacity-50 transition-colors flex items-center gap-1"
+              >
+                Move to
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-3.5" aria-hidden="true">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              {moveOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full mt-1.5 z-30 rounded-xl border border-foreground/10 bg-background shadow-lg shadow-foreground/[0.08] ring-1 ring-foreground/5"
+                >
+                  <FolderTreePicker
+                    folders={folders}
+                    pending={isPending}
+                    disabledIds={disabledMoveTargets}
+                    onPick={handleMoveTo}
+                    onCreateAndPick={handleCreateAndPick}
+                  />
+                </div>
+              )}
+            </div>
             {archived ? (
               <button
                 type="button"
@@ -242,17 +329,40 @@ export default function ExperimentsList({ experiments, view, sortBy, sortOrder, 
     </div>
   )
 
+  // Drag a single experiment by default. If the item is part of a multi-select,
+  // drag the whole selection instead so users can move many at once.
+  const makeDragStart = (id: string) => (e: React.DragEvent) => {
+    const ids = selectMode && selected.has(id) && selected.size > 1
+      ? Array.from(selected)
+      : [id]
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ type: 'experiments', ids }))
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
   // In select mode, the inner card's <Link> must not navigate — we make it
   // non-interactive and handle the click on the outer wrapper instead.
   function ItemWrap({ id, name, children }: { id: string; name: string; children: React.ReactNode }) {
     const isSelected = selected.has(id)
-    if (!selectMode) return <>{children}</>
+    if (!selectMode) {
+      if (!enableDrag) return <>{children}</>
+      return (
+        <div
+          draggable
+          onDragStart={makeDragStart(id)}
+          className="cursor-grab active:cursor-grabbing"
+        >
+          {children}
+        </div>
+      )
+    }
     return (
       <div
         role="button"
         tabIndex={0}
         aria-pressed={isSelected}
         aria-label={`Select ${name}`}
+        draggable={enableDrag || undefined}
+        onDragStart={enableDrag ? makeDragStart(id) : undefined}
         onClick={() => toggleOne(id)}
         onKeyDown={e => {
           if (e.key === ' ' || e.key === 'Enter') {
@@ -289,7 +399,17 @@ export default function ExperimentsList({ experiments, view, sortBy, sortOrder, 
         <div className="border border-foreground/10 rounded-xl divide-y divide-foreground/8 overflow-hidden">
           {experiments.map(exp => {
             if (!selectMode) {
-              return <ExperimentListRow key={exp.id} experiment={exp} />
+              if (!enableDrag) return <ExperimentListRow key={exp.id} experiment={exp} />
+              return (
+                <div
+                  key={exp.id}
+                  draggable
+                  onDragStart={makeDragStart(exp.id)}
+                  className="cursor-grab active:cursor-grabbing"
+                >
+                  <ExperimentListRow experiment={exp} />
+                </div>
+              )
             }
             const isSelected = selected.has(exp.id)
             return (
@@ -299,6 +419,8 @@ export default function ExperimentsList({ experiments, view, sortBy, sortOrder, 
                 tabIndex={0}
                 aria-pressed={isSelected}
                 aria-label={`Select ${exp.name}`}
+                draggable={enableDrag || undefined}
+                onDragStart={enableDrag ? makeDragStart(exp.id) : undefined}
                 onClick={() => toggleOne(exp.id)}
                 onKeyDown={e => {
                   if (e.key === ' ' || e.key === 'Enter') {
@@ -326,7 +448,7 @@ export default function ExperimentsList({ experiments, view, sortBy, sortOrder, 
       <>
         {controlsBar}
         {actionBar}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {experiments.map(exp => (
             <ItemWrap key={exp.id} id={exp.id} name={exp.name}>
               <ExperimentTile experiment={exp} />

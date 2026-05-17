@@ -121,7 +121,7 @@ export default function FilterControls({ rightSlot }: { rightSlot?: ReactNode })
             so the date range inputs don't get squeezed when the search bar shrinks
             behind a wider rightSlot. */}
         {open && (
-          <div className="absolute top-full left-0 mt-1.5 z-20 w-full sm:w-80 rounded-xl border border-foreground/15 bg-background p-4 flex flex-col gap-3">
+          <div className="absolute top-full left-0 mt-1.5 z-20 w-full rounded-xl border border-foreground/15 bg-background shadow-lg shadow-foreground/[0.08] ring-1 ring-foreground/5 p-4 flex flex-col gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs text-foreground/50 font-medium">Status</label>
               <select

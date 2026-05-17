@@ -1,6 +1,6 @@
 export default function ExperimentLoading() {
   return (
-    <div className="max-w-2xl mx-auto px-6 py-8">
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       <div className="flex items-start justify-between gap-4 mb-8">
         <div className="flex flex-col gap-2">
           <div className="h-4 w-36 bg-foreground/10 rounded animate-pulse" />
